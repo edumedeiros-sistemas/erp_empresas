@@ -1,8 +1,12 @@
 import { AuthProvider } from '@/contexts/AuthContext'
 import { OrgProvider } from '@/contexts/OrgContext'
 import AppLayout from '@/layouts/AppLayout'
+import CadastrosLayout from '@/layouts/CadastrosLayout'
 import DashboardPage from '@/pages/DashboardPage'
-import FinancePage from '@/pages/finance/FinancePage'
+import FinanceLayout from '@/layouts/FinanceLayout'
+import FinanceLancamentosPage from '@/pages/finance/FinanceLancamentosPage'
+import PayablesPage from '@/pages/finance/PayablesPage'
+import ReceivablesPage from '@/pages/finance/ReceivablesPage'
 import LoginPage from '@/pages/LoginPage'
 import OrgSelectPage from '@/pages/OrgSelectPage'
 import RegisterPage from '@/pages/RegisterPage'
@@ -10,12 +14,31 @@ import ClientFormPage from '@/pages/clients/ClientFormPage'
 import ClientListPage from '@/pages/clients/ClientListPage'
 import ProductFormPage from '@/pages/products/ProductFormPage'
 import ProductListPage from '@/pages/products/ProductListPage'
+import SupplierFormPage from '@/pages/suppliers/SupplierFormPage'
+import SupplierListPage from '@/pages/suppliers/SupplierListPage'
 import SaleListPage from '@/pages/sales/SaleListPage'
 import SaleNewPage from '@/pages/sales/SaleNewPage'
-import SettingsPage from '@/pages/settings/SettingsPage'
+import EntradasLayout from '@/layouts/EntradasLayout'
+import NfeImportPage from '@/pages/stock/NfeImportPage'
 import StockEntriesPage from '@/pages/stock/StockEntriesPage'
 import { RequireAuth, RequireOrg } from '@/routes/Guards'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
+
+function LegacyClientesIdRedirect() {
+  const { id } = useParams<{ id: string }>()
+  return <Navigate to={`/app/cadastros/clientes/${id}`} replace />
+}
+
+function LegacyProdutosRootRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={`/app/cadastros/produtos${search}`} replace />
+}
+
+function LegacyProdutosIdRedirect() {
+  const { id } = useParams<{ id: string }>()
+  const { search } = useLocation()
+  return <Navigate to={`/app/cadastros/produtos/${id}${search}`} replace />
+}
 
 export default function App() {
   return (
@@ -30,15 +53,31 @@ export default function App() {
               <Route element={<RequireOrg />}>
                 <Route path="/app" element={<AppLayout />}>
                   <Route index element={<DashboardPage />} />
-                  <Route path="clientes" element={<ClientListPage />} />
-                  <Route path="clientes/:id" element={<ClientFormPage />} />
-                  <Route path="produtos" element={<ProductListPage />} />
-                  <Route path="produtos/:id" element={<ProductFormPage />} />
+                  <Route path="cadastros" element={<CadastrosLayout />}>
+                    <Route index element={<Navigate to="clientes" replace />} />
+                    <Route path="clientes" element={<ClientListPage />} />
+                    <Route path="clientes/:id" element={<ClientFormPage />} />
+                    <Route path="produtos" element={<ProductListPage />} />
+                    <Route path="produtos/:id" element={<ProductFormPage />} />
+                    <Route path="marcas" element={<SupplierListPage />} />
+                    <Route path="marcas/:id" element={<SupplierFormPage />} />
+                  </Route>
+                  <Route path="clientes" element={<Navigate to="/app/cadastros/clientes" replace />} />
+                  <Route path="clientes/:id" element={<LegacyClientesIdRedirect />} />
+                  <Route path="produtos" element={<LegacyProdutosRootRedirect />} />
+                  <Route path="produtos/:id" element={<LegacyProdutosIdRedirect />} />
                   <Route path="vendas" element={<SaleListPage />} />
                   <Route path="vendas/nova" element={<SaleNewPage />} />
-                  <Route path="entradas" element={<StockEntriesPage />} />
-                  <Route path="financeiro" element={<FinancePage />} />
-                  <Route path="config" element={<SettingsPage />} />
+                  <Route path="entradas" element={<EntradasLayout />}>
+                    <Route index element={<StockEntriesPage />} />
+                    <Route path="nfe" element={<NfeImportPage />} />
+                  </Route>
+                  <Route path="financeiro" element={<FinanceLayout />}>
+                    <Route index element={<FinanceLancamentosPage />} />
+                    <Route path="pagar" element={<PayablesPage />} />
+                    <Route path="receber" element={<ReceivablesPage />} />
+                  </Route>
+                  <Route path="config" element={<Navigate to="/app/entradas/nfe" replace />} />
                 </Route>
               </Route>
             </Route>

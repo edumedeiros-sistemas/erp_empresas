@@ -1,10 +1,11 @@
 import { Button, Card, Field, Input, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
-import { productsCol } from '@/lib/firestorePaths'
+import { deleteProductForOrg } from '@/lib/deleteProductForOrg'
+import { productDraftsCol, productsCol } from '@/lib/firestorePaths'
 import { useOrg } from '@/contexts/OrgContext'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { deleteDoc, deleteField, doc, getDoc, setDoc } from 'firebase/firestore'
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 function num(s: string) {
   const n = Number(String(s).replace(',', '.'))
@@ -13,26 +14,24 @@ function num(s: string) {
 
 export default function ProductFormPage() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
+  const draftId = searchParams.get('draft')
   const isNew = id === 'novo' || !id
   const { orgId } = useOrg()
   const navigate = useNavigate()
   const [code, setCode] = useState('')
-  const [name, setName] = useState('')
   const [size, setSize] = useState('U')
-  const [category, setCategory] = useState('')
+  const [name, setName] = useState('')
+  const [brand, setBrand] = useState('')
   const [cost, setCost] = useState('0')
   const [freight, setFreight] = useState('0')
   const [ipi, setIpi] = useState('0')
-  const [packaging, setPackaging] = useState('0')
-  const [marginPct, setMarginPct] = useState('0.8')
+  const [salePrice, setSalePrice] = useState('0')
   const [suggestedPrice, setSuggestedPrice] = useState('0')
-  const [minPrice, setMinPrice] = useState('0')
-  const [fee3x, setFee3x] = useState('0')
-  const [price3x, setPrice3x] = useState('0')
-  const [fee12x, setFee12x] = useState('0')
-  const [price12x, setPrice12x] = useState('0')
   const [stock, setStock] = useState('0')
   const [busy, setBusy] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!orgId || isNew || !id) return
@@ -42,26 +41,47 @@ export default function ProductFormPage() {
       if (cancelled || !snap.exists()) return
       const x = snap.data() as Record<string, unknown>
       setCode(String(x.code ?? ''))
-      setName(String(x.name ?? ''))
       setSize(String(x.size ?? ''))
-      setCategory(String(x.category ?? ''))
+      setName(String(x.name ?? ''))
+      setBrand(String(x.brand ?? ''))
       setCost(String(x.cost ?? 0))
       setFreight(String(x.freight ?? 0))
       setIpi(String(x.ipi ?? 0))
-      setPackaging(String(x.packaging ?? 0))
-      setMarginPct(String(x.marginPct ?? 0))
-      setSuggestedPrice(String(x.suggestedPrice ?? 0))
-      setMinPrice(String(x.minPrice ?? 0))
-      setFee3x(String(x.fee3x ?? 0))
-      setPrice3x(String(x.price3x ?? 0))
-      setFee12x(String(x.fee12x ?? 0))
-      setPrice12x(String(x.price12x ?? 0))
+      const sp = Number(x.salePrice ?? 0)
+      const sug = Number(x.suggestedPrice ?? 0)
+      setSalePrice(String(sp > 0 ? sp : sug))
+      setSuggestedPrice(String(sug))
       setStock(String(x.stock ?? 0))
     })()
     return () => {
       cancelled = true
     }
   }, [orgId, id, isNew])
+
+  useEffect(() => {
+    if (!orgId || !isNew || !draftId) return
+    let cancelled = false
+    ;(async () => {
+      const snap = await getDoc(doc(productDraftsCol(db, orgId), draftId))
+      if (cancelled || !snap.exists()) return
+      const x = snap.data() as Record<string, unknown>
+      setCode(String(x.code ?? ''))
+      setName(String(x.name ?? ''))
+      setSize(String(x.size ?? 'U'))
+      const uc = Number(x.lastUnitCost ?? 0)
+      setCost(String(uc))
+      const fNfe = Number(x.nfeFreightPerUnit ?? 0)
+      setFreight(fNfe > 0 ? String(fNfe) : '0')
+      setIpi('0')
+      const sug = uc > 0 ? Math.round(uc * 1.8 * 100) / 100 : 0
+      setSuggestedPrice(String(sug))
+      setSalePrice(String(sug))
+      setStock(String(Math.round(Number(x.lastQty ?? 0))))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [orgId, isNew, draftId])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -71,8 +91,7 @@ export default function ProductFormPage() {
       const c = num(cost)
       const fr = num(freight)
       const ip = num(ipi)
-      const pk = num(packaging)
-      const totalCost = c + fr + ip + pk
+      const totalCost = c + fr + ip
       const ref = isNew ? doc(productsCol(db, orgId)) : doc(productsCol(db, orgId), id!)
       await setDoc(
         ref,
@@ -80,35 +99,64 @@ export default function ProductFormPage() {
           code: code.trim(),
           name: name.trim(),
           size: size.trim(),
-          category: category.trim(),
+          brand: brand.trim(),
           cost: c,
           freight: fr,
           ipi: ip,
-          packaging: pk,
           totalCost,
-          marginPct: num(marginPct),
+          salePrice: num(salePrice),
           suggestedPrice: num(suggestedPrice),
-          minPrice: num(minPrice),
-          fee3x: num(fee3x),
-          price3x: num(price3x),
-          fee12x: num(fee12x),
-          price12x: num(price12x),
           stock: Math.round(num(stock)),
+          category: deleteField(),
+          packaging: deleteField(),
+          marginPct: deleteField(),
+          minPrice: deleteField(),
+          fee3x: deleteField(),
+          price3x: deleteField(),
+          fee12x: deleteField(),
+          price12x: deleteField(),
+          nfeFreightPerUnit: deleteField(),
         },
         { merge: true },
       )
-      navigate('/app/produtos')
+      if (orgId && draftId) {
+        await deleteDoc(doc(productDraftsCol(db, orgId), draftId))
+      }
+      navigate('/app/cadastros/produtos')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function onDeleteProduct() {
+    if (!orgId || !id || isNew) return
+    const label = `${code.trim() || '?'} · ${name.trim() || 'sem nome'}`
+    if (
+      !confirm(
+        `Excluir o produto "${label}"? Os movimentos de stock deste produto serão apagados. Linhas de venda antigas podem continuar a referenciar este produto (dados órfãos). Esta ação não pode ser desfeita.`,
+      )
+    )
+      return
+    if (!confirm('Confirme novamente: excluir definitivamente este produto?')) return
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      await deleteProductForOrg(db, orgId, id)
+      navigate('/app/cadastros/produtos')
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Não foi possível excluir.')
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
   return (
     <div>
       <PageTitle
-        title={isNew ? 'Novo produto' : 'Editar produto'}
+        title={isNew ? (draftId ? 'Completar cadastro (NF-e)' : 'Novo produto') : 'Editar produto'}
+        subtitle="Marca será ligada a um cadastro próprio numa próxima versão; por agora escreva o nome da marca."
         actions={
-          <Link to="/app/produtos">
+          <Link to="/app/cadastros/produtos">
             <Button variant="secondary" type="button">
               Voltar
             </Button>
@@ -128,12 +176,11 @@ export default function ProductFormPage() {
               <Input value={name} onChange={(e) => setName(e.target.value)} required />
             </Field>
           </div>
-          <Field label="Categoria">
-            <Input value={category} onChange={(e) => setCategory(e.target.value)} />
-          </Field>
-          <Field label="Stock atual">
-            <Input type="number" value={stock} onChange={(e) => setStock(e.target.value)} />
-          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Marca">
+              <Input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Ex.: Dicorpo" />
+            </Field>
+          </div>
           <Field label="Custo">
             <Input value={cost} onChange={(e) => setCost(e.target.value)} />
           </Field>
@@ -143,37 +190,41 @@ export default function ProductFormPage() {
           <Field label="IPI">
             <Input value={ipi} onChange={(e) => setIpi(e.target.value)} />
           </Field>
-          <Field label="Embalagem">
-            <Input value={packaging} onChange={(e) => setPackaging(e.target.value)} />
-          </Field>
-          <Field label="Margem % (ex.: 0.8)">
-            <Input value={marginPct} onChange={(e) => setMarginPct(e.target.value)} />
+          <Field label="Preço de venda">
+            <Input value={salePrice} onChange={(e) => setSalePrice(e.target.value)} />
           </Field>
           <Field label="Preço sugerido">
             <Input value={suggestedPrice} onChange={(e) => setSuggestedPrice(e.target.value)} />
           </Field>
-          <Field label="Preço mínimo">
-            <Input value={minPrice} onChange={(e) => setMinPrice(e.target.value)} />
-          </Field>
-          <Field label="Taxa 3x">
-            <Input value={fee3x} onChange={(e) => setFee3x(e.target.value)} />
-          </Field>
-          <Field label="3x sem juros (preço)">
-            <Input value={price3x} onChange={(e) => setPrice3x(e.target.value)} />
-          </Field>
-          <Field label="Taxa 12x">
-            <Input value={fee12x} onChange={(e) => setFee12x(e.target.value)} />
-          </Field>
-          <Field label="12x sem juros (preço)">
-            <Input value={price12x} onChange={(e) => setPrice12x(e.target.value)} />
+          <Field label="Stock atual">
+            <Input type="number" value={stock} onChange={(e) => setStock(e.target.value)} />
           </Field>
           <div className="sm:col-span-2">
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy || deleteBusy}>
               Guardar
             </Button>
           </div>
         </form>
       </Card>
+
+      {!isNew && id ? (
+        <Card className="mt-6 max-w-3xl border-red-200 bg-red-50/30 dark:border-red-900 dark:bg-red-950/20">
+          <h2 className="text-sm font-semibold text-red-900 dark:text-red-200">Excluir produto</h2>
+          <p className="mt-1 text-sm text-red-900/90 dark:text-red-200/90">
+            Remove este cadastro e apaga os movimentos de stock associados a este produto. Não remove vendas nem utilizadores.
+          </p>
+          {deleteError ? <p className="mt-2 text-sm text-red-700 dark:text-red-300">{deleteError}</p> : null}
+          <Button
+            type="button"
+            variant="danger"
+            className="mt-3"
+            disabled={busy || deleteBusy}
+            onClick={() => void onDeleteProduct()}
+          >
+            {deleteBusy ? 'A excluir…' : 'Excluir produto'}
+          </Button>
+        </Card>
+      ) : null}
     </div>
   )
 }

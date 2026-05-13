@@ -1,79 +1,92 @@
 import { Button, Card, Field, Input, PageTitle, Select } from '@/components/Ui'
 import { db } from '@/firebase'
-import { clientsCol, productsCol, settingsDoc } from '@/lib/firestorePaths'
+import { clientsCol, productsCol } from '@/lib/firestorePaths'
 import { createSale } from '@/lib/saleOps'
 import { useOrg } from '@/contexts/OrgContext'
-import type { OrgSettings } from '@/types'
-import { getDocs, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { useEffect, useState, type FormEvent } from 'react'
+import { getDocs, orderBy, query } from 'firebase/firestore'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
-type ClientOpt = { id: string; code: string; name: string }
-type ProductOpt = { id: string; code: string; name: string; size: string; stock: number; suggestedPrice: number }
+type ClientOpt = { id: string; name: string; phone: string }
+type ProductOpt = {
+  id: string
+  code: string
+  name: string
+  size: string
+  stock: number
+  salePrice: number
+  suggestedPrice: number
+}
 
 type Line = { productId: string; quantity: string; unitPrice: string }
+
+const PAYMENT_OPTIONS = ['PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Crediário'] as const
+type PaymentOption = (typeof PAYMENT_OPTIONS)[number]
+
+function needsInstallments(method: PaymentOption) {
+  return method === 'Cartão de Crédito' || method === 'Crediário'
+}
+
+function formatPaymentMethod(base: PaymentOption, installments: number): string {
+  if (needsInstallments(base)) return `${base} · ${installments}x`
+  return base
+}
+
+function normalize(s: string) {
+  return s.trim().toLowerCase()
+}
 
 export default function SaleNewPage() {
   const { orgId } = useOrg()
   const navigate = useNavigate()
   const [clients, setClients] = useState<ClientOpt[]>([])
   const [products, setProducts] = useState<ProductOpt[]>([])
-  const [settings, setSettings] = useState<OrgSettings | null>(null)
   const [clientId, setClientId] = useState('')
+  const [clientQuery, setClientQuery] = useState('')
+  const [clientListOpen, setClientListOpen] = useState(false)
+  const clientBoxRef = useRef<HTMLDivElement>(null)
   const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0, 10))
-  const [paymentMethod, setPaymentMethod] = useState('Pix')
-  const [status, setStatus] = useState('Pendente')
+  const [paymentBase, setPaymentBase] = useState<PaymentOption>('PIX')
+  const [installments, setInstallments] = useState('2')
   const [amountReceived, setAmountReceived] = useState('0')
-  const [amountPending, setAmountPending] = useState('0')
   const [lines, setLines] = useState<Line[]>([{ productId: '', quantity: '1', unitPrice: '0' }])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!orgId) return
-    const unsub = onSnapshot(settingsDoc(db, orgId), (snap) => {
-      if (!snap.exists()) {
-        setSettings(null)
-        return
-      }
-      const d = snap.data() as Record<string, unknown>
-      setSettings({
-        paymentMethods: (d.paymentMethods as string[]) ?? [],
-        saleStatuses: (d.saleStatuses as string[]) ?? [],
-        sizes: (d.sizes as string[]) ?? [],
-        financialCategories: (d.financialCategories as string[]) ?? [],
-        suppliers: (d.suppliers as string[]) ?? [],
-        months: (d.months as string[]) ?? [],
-      })
-    })
-    return unsub
-  }, [orgId])
-
-  useEffect(() => {
-    if (!orgId) return
     let cancelled = false
     ;(async () => {
       const [cSnap, pSnap] = await Promise.all([
-        getDocs(query(clientsCol(db, orgId), orderBy('code'))),
+        getDocs(query(clientsCol(db, orgId))),
         getDocs(query(productsCol(db, orgId), orderBy('code'))),
       ])
       if (cancelled) return
       setClients(
-        cSnap.docs.map((d) => {
-          const x = d.data() as Record<string, unknown>
-          return { id: d.id, code: String(x.code ?? ''), name: String(x.name ?? '') }
-        }),
+        cSnap.docs
+          .map((d) => {
+            const x = d.data() as Record<string, unknown>
+            return {
+              id: d.id,
+              name: String(x.name ?? ''),
+              phone: String(x.phone ?? ''),
+            }
+          })
+          .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt', { sensitivity: 'base' })),
       )
       setProducts(
         pSnap.docs.map((d) => {
           const x = d.data() as Record<string, unknown>
+          const sug = Number(x.suggestedPrice ?? 0)
+          const sale = Number(x.salePrice ?? 0)
           return {
             id: d.id,
             code: String(x.code ?? ''),
             name: String(x.name ?? ''),
             size: String(x.size ?? ''),
             stock: Number(x.stock ?? 0),
-            suggestedPrice: Number(x.suggestedPrice ?? 0),
+            salePrice: sale > 0 ? sale : sug,
+            suggestedPrice: sug,
           }
         }),
       )
@@ -84,14 +97,51 @@ export default function SaleNewPage() {
   }, [orgId])
 
   useEffect(() => {
-    if (!settings) return
-    if (settings.paymentMethods.length && !settings.paymentMethods.includes(paymentMethod)) {
-      setPaymentMethod(settings.paymentMethods[0]!)
+    function onDocMouseDown(e: MouseEvent) {
+      if (!clientBoxRef.current?.contains(e.target as Node)) setClientListOpen(false)
     }
-    if (settings.saleStatuses.length && !settings.saleStatuses.includes(status)) {
-      setStatus(settings.saleStatuses[0]!)
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [])
+
+  const selectedClient = useMemo(() => clients.find((c) => c.id === clientId), [clients, clientId])
+
+  const filteredClients = useMemo(() => {
+    const q = normalize(clientQuery)
+    if (!q) return clients.slice(0, 12)
+    return clients
+      .filter((c) => {
+        const n = normalize(c.name)
+        const ph = normalize(c.phone)
+        return n.includes(q) || ph.includes(q)
+      })
+      .slice(0, 12)
+  }, [clients, clientQuery])
+
+  const lineSubtotal = useMemo(() => {
+    let sum = 0
+    for (const l of lines) {
+      const q = Number(String(l.quantity).replace(',', '.'))
+      const p = Number(String(l.unitPrice).replace(',', '.'))
+      if (l.productId && Number.isFinite(q) && Number.isFinite(p) && q > 0) sum += q * p
     }
-  }, [settings, paymentMethod, status])
+    return sum
+  }, [lines])
+
+  function pickClient(c: ClientOpt) {
+    setClientId(c.id)
+    setClientQuery(`${c.name || '—'}${c.phone ? ` · ${c.phone}` : ''}`)
+    setClientListOpen(false)
+  }
+
+  function onClientInputChange(value: string) {
+    setClientQuery(value)
+    setClientListOpen(true)
+    if (selectedClient) {
+      const label = `${selectedClient.name || '—'}${selectedClient.phone ? ` · ${selectedClient.phone}` : ''}`
+      if (value !== label) setClientId('')
+    }
+  }
 
   function setLine(i: number, patch: Partial<Line>) {
     setLines((prev) => prev.map((row, j) => (j === i ? { ...row, ...patch } : row)))
@@ -111,9 +161,11 @@ export default function SaleNewPage() {
     setError(null)
     const client = clients.find((c) => c.id === clientId)
     if (!client) {
-      setError('Selecione um cliente.')
+      setError('Escolha um cliente na lista (escreva o nome e clique num resultado).')
       return
     }
+    const inst = Math.max(1, Math.min(48, Math.floor(Number(String(installments).replace(',', '.')) || 1)))
+    const paymentMethod = formatPaymentMethod(paymentBase, inst)
     const parsedLines = lines
       .map((l) => ({
         productId: l.productId,
@@ -133,9 +185,9 @@ export default function SaleNewPage() {
         clientName: client.name,
         date: new Date(`${dateStr}T12:00:00`),
         paymentMethod,
-        status,
+        status: 'Pago',
         amountReceived: Number(String(amountReceived).replace(',', '.')),
-        amountPending: Number(String(amountPending).replace(',', '.')),
+        amountPending: 0,
         lines: parsedLines,
       })
       navigate('/app/vendas')
@@ -161,93 +213,134 @@ export default function SaleNewPage() {
       <Card>
         <form onSubmit={onSubmit} className="max-w-2xl space-y-4">
           <Field label="Cliente">
-            <Select value={clientId} onChange={(e) => setClientId(e.target.value)} required>
-              <option value="">— selecionar —</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} — {c.name}
-                </option>
-              ))}
-            </Select>
+            <div ref={clientBoxRef} className="relative">
+              <Input
+                autoComplete="off"
+                value={clientQuery}
+                placeholder="Escreva o nome ou telefone…"
+                onChange={(e) => onClientInputChange(e.target.value)}
+                onFocus={() => setClientListOpen(true)}
+                required
+              />
+              {clientListOpen && filteredClients.length > 0 ? (
+                <ul
+                  className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+                  role="listbox"
+                >
+                  {filteredClients.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className="flex w-full flex-col items-start px-3 py-2 text-left hover:bg-violet-50 dark:hover:bg-violet-950/40"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickClient(c)}
+                      >
+                        <span className="font-medium text-zinc-900 dark:text-zinc-50">{c.name || '—'}</span>
+                        {c.phone ? <span className="text-xs text-zinc-500">{c.phone}</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {clientListOpen && clientQuery.trim() && filteredClients.length === 0 ? (
+                <p className="absolute z-30 mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  Nenhum cliente encontrado.
+                </p>
+              ) : null}
+            </div>
           </Field>
           <Field label="Data">
             <Input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} required />
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Forma de pagamento">
-              <Select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                {(settings?.paymentMethods ?? ['Pix', 'Dinheiro']).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
+          <Field label="Forma de pagamento">
+            <Select value={paymentBase} onChange={(e) => setPaymentBase(e.target.value as PaymentOption)}>
+              {PAYMENT_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {needsInstallments(paymentBase) ? (
+            <Field label="Quantidade de parcelas">
+              <Input
+                type="number"
+                min={1}
+                max={48}
+                value={installments}
+                onChange={(e) => setInstallments(e.target.value)}
+              />
             </Field>
-            <Field label="Status">
-              <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                {(settings?.saleStatuses ?? ['Pago', 'Pendente']).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Valor recebido">
-              <Input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} />
-            </Field>
-            <Field label="Valor pendente">
-              <Input value={amountPending} onChange={(e) => setAmountPending(e.target.value)} />
-            </Field>
-          </div>
+          ) : null}
+          <Field label="Valor recebido">
+            <Input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} />
+          </Field>
 
           <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-semibold">Itens</span>
+              <div className="text-right">
+                <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Total da venda</div>
+                <div className="text-lg font-semibold text-violet-700 dark:text-violet-300">
+                  {lineSubtotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </div>
+              </div>
+            </div>
+            <div className="mb-3 flex justify-end">
               <Button variant="secondary" type="button" onClick={addLine}>
                 + Linha
               </Button>
             </div>
             <div className="space-y-3">
-              {lines.map((line, i) => (
-                <div key={i} className="grid gap-2 rounded-lg border border-zinc-100 p-3 dark:border-zinc-800 sm:grid-cols-12">
-                  <div className="sm:col-span-5">
-                    <LabelMini>Produto</LabelMini>
-                    <Select
-                      value={line.productId}
-                      onChange={(e) => {
-                        const pid = e.target.value
-                        const p = products.find((x) => x.id === pid)
-                        setLine(i, {
-                          productId: pid,
-                          unitPrice: p ? String(p.suggestedPrice) : line.unitPrice,
-                        })
-                      }}
-                    >
-                      <option value="">—</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.code} {p.name} ({p.size}) stock {p.stock}
-                        </option>
-                      ))}
-                    </Select>
+              {lines.map((line, i) => {
+                const q = Number(String(line.quantity).replace(',', '.'))
+                const p = Number(String(line.unitPrice).replace(',', '.'))
+                const lineTot =
+                  line.productId && Number.isFinite(q) && Number.isFinite(p) && q > 0 ? q * p : 0
+                return (
+                  <div key={i} className="grid gap-2 rounded-lg border border-zinc-100 p-3 dark:border-zinc-800 sm:grid-cols-12">
+                    <div className="sm:col-span-5">
+                      <LabelMini>Produto</LabelMini>
+                      <Select
+                        value={line.productId}
+                        onChange={(e) => {
+                          const pid = e.target.value
+                          const pr = products.find((x) => x.id === pid)
+                          setLine(i, {
+                            productId: pid,
+                            unitPrice: pr ? String(pr.salePrice > 0 ? pr.salePrice : pr.suggestedPrice) : line.unitPrice,
+                          })
+                        }}
+                      >
+                        <option value="">—</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.code} {p.name} ({p.size}) stock {p.stock}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <LabelMini>Qtd</LabelMini>
+                      <Input value={line.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <LabelMini>Preço unit.</LabelMini>
+                      <Input value={line.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />
+                    </div>
+                    <div className="sm:col-span-1 flex flex-col justify-end text-right text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                      {lineTot > 0
+                        ? lineTot.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 })
+                        : '—'}
+                    </div>
+                    <div className="flex items-end sm:col-span-2">
+                      <Button variant="ghost" type="button" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
+                        Remover
+                      </Button>
+                    </div>
                   </div>
-                  <div className="sm:col-span-2">
-                    <LabelMini>Qtd</LabelMini>
-                    <Input value={line.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <LabelMini>Preço unit.</LabelMini>
-                    <Input value={line.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />
-                  </div>
-                  <div className="flex items-end sm:col-span-2">
-                    <Button variant="ghost" type="button" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
-                      Remover
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 

@@ -9,6 +9,10 @@ export function clientsCol(db: Firestore, orgId: string) {
   return collection(db, 'organizations', orgId, 'clients')
 }
 
+export function suppliersCol(db: Firestore, orgId: string) {
+  return collection(db, 'organizations', orgId, 'suppliers')
+}
+
 export function productsCol(db: Firestore, orgId: string) {
   return collection(db, 'organizations', orgId, 'products')
 }
@@ -29,12 +33,28 @@ export function financialCol(db: Firestore, orgId: string) {
   return collection(db, 'organizations', orgId, 'financialTransactions')
 }
 
+export function payablesCol(db: Firestore, orgId: string) {
+  return collection(db, 'organizations', orgId, 'payables')
+}
+
+export function receivablesCol(db: Firestore, orgId: string) {
+  return collection(db, 'organizations', orgId, 'receivables')
+}
+
 export function membersCol(db: Firestore, orgId: string) {
   return collection(db, 'organizations', orgId, 'members')
 }
 
 export function settingsDoc(db: Firestore, orgId: string) {
   return doc(db, 'organizations', orgId, 'meta', 'settings')
+}
+
+export function productDraftsCol(db: Firestore, orgId: string) {
+  return collection(db, 'organizations', orgId, 'productDrafts')
+}
+
+export function supplierDraftsCol(db: Firestore, orgId: string) {
+  return collection(db, 'organizations', orgId, 'supplierDrafts')
 }
 
 export function dashboardDoc(db: Firestore, orgId: string) {

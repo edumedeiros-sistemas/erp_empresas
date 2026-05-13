@@ -3,6 +3,7 @@ import {
   clientsCol,
   dashboardDoc,
   productsCol,
+  receivablesCol,
   saleItemsCol,
   salesCol,
 } from '@/lib/firestorePaths'
@@ -170,6 +171,24 @@ export async function createSale(input: CreateSaleInput) {
       const itemRef = doc(saleItemsCol(db, orgId, saleRef.id))
       transaction.set(itemRef, item)
     })
+
+    if (paymentMethod.trim().startsWith('Crediário')) {
+      const recRef = doc(receivablesCol(db, orgId), saleRef.id)
+      const instMatch = paymentMethod.match(/·\s*(\d+)\s*x\s*$/i)
+      const installmentCount = instMatch ? Math.max(1, parseInt(instMatch[1]!, 10)) : 1
+      transaction.set(recRef, {
+        saleId: saleRef.id,
+        clientId,
+        clientName,
+        amount: subtotal,
+        installmentCount,
+        paymentMethod,
+        status: 'aberto',
+        saleDate: saleTs,
+        createdAt: serverTimestamp(),
+        receivedAt: null,
+      })
+    }
   })
 
   return saleRef.id
@@ -261,6 +280,9 @@ export async function deleteSale(orgId: string, saleId: string) {
     itemsSnap.docs.forEach((d) => {
       transaction.delete(d.ref)
     })
+    const recRef = doc(receivablesCol(db, orgId), saleId)
+    const recSnap = await transaction.get(recRef)
+    if (recSnap.exists()) transaction.delete(recRef)
     transaction.delete(saleRef)
   })
 }

@@ -15,6 +15,7 @@ type Row = {
   size: string
   quantity: number
   total: number
+  type?: string
 }
 
 export default function StockEntriesPage() {
@@ -69,6 +70,7 @@ export default function StockEntriesPage() {
             size: String(x.size ?? ''),
             quantity: Number(x.quantity ?? 0),
             total: Number(x.total ?? 0),
+            type: String(x.type ?? 'purchase_in'),
           }
         }),
       )
@@ -107,7 +109,7 @@ export default function StockEntriesPage() {
 
   return (
     <div>
-      <PageTitle title="Entradas de stock" subtitle="Compras que aumentam o stock do produto." />
+      <PageTitle title="Entrada manual" subtitle="Registe uma compra produto a produto; o movimento aparece na lista abaixo como origem Manual." />
       <Card className="mb-6">
         <form onSubmit={onSubmit} className="max-w-xl space-y-3">
           <Field label="Produto">
@@ -144,6 +146,7 @@ export default function StockEntriesPage() {
               <th className="px-3 py-2">Data</th>
               <th className="px-3 py-2">Produto</th>
               <th className="px-3 py-2">Tam.</th>
+              <th className="hidden px-3 py-2 sm:table-cell">Origem</th>
               <th className="px-3 py-2 text-right">Qtd</th>
               <th className="px-3 py-2 text-right">Total</th>
             </tr>
@@ -156,6 +159,9 @@ export default function StockEntriesPage() {
                 </td>
                 <td className="px-3 py-2">{r.productName}</td>
                 <td className="px-3 py-2">{r.size}</td>
+                <td className="hidden px-3 py-2 text-xs text-zinc-500 sm:table-cell">
+                  {r.type === 'nfe_in' ? 'NF-e' : 'Manual'}
+                </td>
                 <td className="px-3 py-2 text-right">{r.quantity}</td>
                 <td className="px-3 py-2 text-right">
                   {r.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}

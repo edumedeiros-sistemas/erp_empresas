@@ -1,7 +1,7 @@
 import type { DashboardStats, OrgSettings } from '@/types'
 
 export const defaultOrgSettings = (): OrgSettings => ({
-  paymentMethods: ['Pix', 'Dinheiro', 'Boleto', 'Cartão 1x', 'Cartão 3x', 'Cartão 12x'],
+  paymentMethods: ['PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Crediário'],
   saleStatuses: ['Pago', 'Pendente'],
   sizes: ['PP', 'P', 'M', 'G', 'GG', 'U'],
   financialCategories: [

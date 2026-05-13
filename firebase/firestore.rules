@@ -40,7 +40,19 @@ service cloud.firestore {
         allow read, write: if isOrgMember(orgId);
       }
 
+      match /suppliers/{supplierId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+
       match /products/{productId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+
+      match /productDrafts/{draftId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+
+      match /supplierDrafts/{draftId} {
         allow read, write: if isOrgMember(orgId);
       }
 
@@ -56,6 +68,14 @@ service cloud.firestore {
       }
 
       match /financialTransactions/{txId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+
+      match /payables/{payableId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+
+      match /receivables/{receivableId} {
         allow read, write: if isOrgMember(orgId);
       }
 

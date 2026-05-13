@@ -1,6 +1,8 @@
 import { Button, Card, Field, Input, PageTitle, Select, TextArea } from '@/components/Ui'
 import { db } from '@/firebase'
+import { defaultOrgSettings } from '@/lib/defaults'
 import { financialCol, settingsDoc } from '@/lib/firestorePaths'
+import { mergeOrgSettingsFromFirestore } from '@/lib/orgSettingsMerge'
 import { applyFinancialDelta } from '@/lib/financialOps'
 import { useOrg } from '@/contexts/OrgContext'
 import type { FinancialType, OrgSettings } from '@/types'
@@ -27,10 +29,10 @@ type Row = {
   status: string
 }
 
-export default function FinancePage() {
+export default function FinanceLancamentosPage() {
   const { orgId } = useOrg()
   const [rows, setRows] = useState<Row[]>([])
-  const [settings, setSettings] = useState<OrgSettings | null>(null)
+  const [settings, setSettings] = useState<OrgSettings>(() => defaultOrgSettings())
   const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0, 10))
   const [type, setType] = useState<FinancialType>('saida')
   const [category, setCategory] = useState('')
@@ -44,19 +46,9 @@ export default function FinancePage() {
   useEffect(() => {
     if (!orgId) return
     const unsub = onSnapshot(settingsDoc(db, orgId), (snap) => {
-      if (!snap.exists()) {
-        setSettings(null)
-        return
-      }
-      const d = snap.data() as Record<string, unknown>
-      setSettings({
-        paymentMethods: (d.paymentMethods as string[]) ?? [],
-        saleStatuses: (d.saleStatuses as string[]) ?? [],
-        sizes: (d.sizes as string[]) ?? [],
-        financialCategories: (d.financialCategories as string[]) ?? [],
-        suppliers: (d.suppliers as string[]) ?? [],
-        months: (d.months as string[]) ?? [],
-      })
+      setSettings(
+        mergeOrgSettingsFromFirestore(snap.exists() ? (snap.data() as Record<string, unknown>) : undefined),
+      )
     })
     return unsub
   }, [orgId])
@@ -122,11 +114,11 @@ export default function FinancePage() {
     await applyFinancialDelta(orgId, r.type, r.amount, -1)
   }
 
-  const cats = settings?.financialCategories ?? []
+  const cats = settings.financialCategories
 
   return (
     <div>
-      <PageTitle title="Financeiro" subtitle="Entradas e saídas (fora das vendas)." />
+      <PageTitle title="Lançamentos" subtitle="Entradas e saídas registadas manualmente (fora das vendas)." />
       <Card className="mb-6">
         <form onSubmit={onSubmit} className="max-w-2xl space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">

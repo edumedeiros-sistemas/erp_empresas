@@ -1,0 +1,12 @@
+{
+  "name": "aura-casa-import-excel",
+  "private": true,
+  "description": "Import Excel para Firestore (Node.js + firebase-admin)",
+  "scripts": {
+    "clients": "node importClients.cjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "aura-casa-clear-org",
+  "private": true,
+  "description": "Limpeza de dados Firestore para testar importação NF-e de novo",
+  "scripts": {
+    "clear": "node clearForImportTest.cjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}

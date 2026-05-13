@@ -8,6 +8,7 @@ import argparse
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -50,23 +51,126 @@ def norm_id_part(s: str) -> str:
     return out[:200] if out else "x"
 
 
+def safe_int(val: Any, default: int = 0) -> int:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return default
+
+
+def pick_col(row: pd.Series, *candidates: str) -> Any:
+    """Primeira coluna cuja etiqueta coincide (após strip) com um dos nomes dados."""
+    by_label = {str(c).strip(): c for c in row.index}
+    for name in candidates:
+        key = name.strip()
+        col = by_label.get(key)
+        if col is not None:
+            return row[col]
+    return None
+
+
+def _letters_only_lower(s: str) -> str:
+    nf = unicodedata.normalize("NFKD", s.strip())
+    return "".join(c for c in nf if not unicodedata.combining(c)).lower()
+
+
+def txt(row: pd.Series, *keys: str) -> str:
+    v = pick_col(row, *keys)
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    s = str(v).strip()
+    return "" if s.lower() == "nan" else s
+
+
+def import_sheet_clients(org_ref: Any, xl: pd.ExcelFile) -> tuple[dict[str, str], dict[str, str], int]:
+    """Lê folha Clientes e grava em organizations/{org}/clients."""
+    client_code_to_id: dict[str, str] = {}
+    client_name_to_id: dict[str, str] = {}
+    if "Clientes" not in xl.sheet_names:
+        return client_code_to_id, client_name_to_id, 0
+
+    df_c = pd.read_excel(xl, "Clientes")
+    df_c.columns = [str(c).strip() for c in df_c.columns]
+    saved = 0
+    for _, row in df_c.iterrows():
+        code = txt(row, "Código", "Codigo")
+        name = txt(row, "Nome")
+        if not code and not name:
+            continue
+        if _letters_only_lower(code) == "codigo" and _letters_only_lower(name) == "nome":
+            continue
+        cid = norm_id_part(code or name)
+        ref = org_ref.collection("clients").document(cid)
+        display_name = name or code
+        reg = excel_serial_to_datetime(pick_col(row, "Data Cadastro"))
+        last = excel_serial_to_datetime(pick_col(row, "Ultima compra", "Última compra"))
+        ref.set(
+            {
+                "code": code,
+                "name": display_name,
+                "phone": txt(row, "Telefone"),
+                "city": txt(row, "Cidade"),
+                "instagram": txt(row, "Intagram", "Instagram"),
+                "registeredAt": reg,
+                "lastPurchaseAt": last,
+                "totalPurchased": parse_money(pick_col(row, "Total comprado")),
+                "purchaseCount": safe_int(pick_col(row, "Quantidade")),
+                "avgTicket": parse_money(pick_col(row, "Ticket Médio", "Ticket Medio")),
+                "notes": txt(row, "Observações", "Observacoes"),
+            },
+            merge=True,
+        )
+        if code:
+            client_code_to_id[code] = ref.id
+        client_name_to_id[display_name] = ref.id
+        saved += 1
+
+    return client_code_to_id, client_name_to_id, saved
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--excel", required=True, help="Path to Aura Casa.xlsx")
     parser.add_argument("--org-id", required=True, dest="org_id")
+    parser.add_argument(
+        "--credentials",
+        dest="credentials",
+        help="Caminho ao JSON da conta de serviço (alternativa a GOOGLE_APPLICATION_CREDENTIALS)",
+    )
+    parser.add_argument(
+        "--clients-only",
+        action="store_true",
+        help="Importar apenas a folha Clientes para o Firestore.",
+    )
     args = parser.parse_args()
 
-    if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        print("Defina GOOGLE_APPLICATION_CREDENTIALS com o caminho ao JSON da conta de serviço.", file=sys.stderr)
+    cred_path = args.credentials or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if cred_path:
+        cred = credentials.Certificate(cred_path)
+    else:
+        print(
+            "Indique --credentials CAMINHO\\serviceAccount.json ou defina a variável GOOGLE_APPLICATION_CREDENTIALS.",
+            file=sys.stderr,
+        )
         return 1
 
-    cred = credentials.ApplicationDefault()
     firebase_admin.initialize_app(cred)
     db = firestore.client()
 
     org_ref = db.collection("organizations").document(args.org_id)
 
     xl = pd.ExcelFile(args.excel)
+
+    client_code_to_id: dict[str, str] = {}
+    client_name_to_id: dict[str, str] = {}
+    product_key_to_id: dict[str, str] = {}
+
+    if args.clients_only:
+        _, _, n = import_sheet_clients(org_ref, xl)
+        print(f"Clientes: {n} linhas gravadas/atualizadas em organizations/{args.org_id}/clients")
+        return 0
 
     # --- Config ---
     if "Config" in xl.sheet_names:
@@ -94,42 +198,8 @@ def main() -> int:
             lists[key] = [str(x).strip() for x in series if str(x).strip()]
         org_ref.collection("meta").document("settings").set(lists, merge=True)
 
-    client_code_to_id: dict[str, str] = {}
-    client_name_to_id: dict[str, str] = {}
-    product_key_to_id: dict[str, str] = {}
-
     # --- Clientes ---
-    if "Clientes" in xl.sheet_names:
-        df_c = pd.read_excel(xl, "Clientes")
-        df_c.columns = [str(c).strip() for c in df_c.columns]
-        for _, row in df_c.iterrows():
-            code = str(row.get("Código", "") or "").strip()
-            name = str(row.get("Nome", "") or "").strip()
-            if not code and not name:
-                continue
-            cid = norm_id_part(code or name)
-            ref = org_ref.collection("clients").document(cid)
-            display_name = name or code
-            reg = excel_serial_to_datetime(row.get("Data Cadastro"))
-            last = excel_serial_to_datetime(row.get("Ultima compra"))
-            ref.set(
-                {
-                    "code": code,
-                    "name": display_name,
-                    "phone": "" if pd.isna(row.get("Telefone")) else str(row.get("Telefone")),
-                    "city": "" if pd.isna(row.get("Cidade")) else str(row.get("Cidade")),
-                    "instagram": "" if pd.isna(row.get("Intagram")) else str(row.get("Intagram")),
-                    "registeredAt": reg,
-                    "lastPurchaseAt": last,
-                    "totalPurchased": parse_money(row.get("Total comprado")),
-                    "purchaseCount": int(row.get("Quantidade") or 0),
-                    "avgTicket": parse_money(row.get("Ticket Médio")),
-                    "notes": "" if pd.isna(row.get("Observações")) else str(row.get("Observações")),
-                },
-                merge=True,
-            )
-            client_code_to_id[code] = ref.id
-            client_name_to_id[display_name] = ref.id
+    client_code_to_id, client_name_to_id, _ = import_sheet_clients(org_ref, xl)
 
     # --- Produtos ---
     if "Produtos" in xl.sheet_names:

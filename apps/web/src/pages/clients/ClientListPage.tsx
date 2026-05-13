@@ -3,7 +3,7 @@ import { db } from '@/firebase'
 import { clientsCol } from '@/lib/firestorePaths'
 import { useOrg } from '@/contexts/OrgContext'
 import type { Client } from '@/types'
-import { onSnapshot, orderBy, query } from 'firebase/firestore'
+import { onSnapshot, query } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -13,27 +13,24 @@ export default function ClientListPage() {
 
   useEffect(() => {
     if (!orgId) return
-    const q = query(clientsCol(db, orgId), orderBy('code'))
+    const q = query(clientsCol(db, orgId))
     return onSnapshot(q, (snap) => {
-      setRows(
-        snap.docs.map((d) => {
-          const x = d.data() as Record<string, unknown>
-          return {
-            id: d.id,
-            code: String(x.code ?? ''),
-            name: String(x.name ?? ''),
-            phone: String(x.phone ?? ''),
-            city: String(x.city ?? ''),
-            instagram: String(x.instagram ?? ''),
-            registeredAt: (x.registeredAt as Client['registeredAt']) ?? null,
-            lastPurchaseAt: (x.lastPurchaseAt as Client['lastPurchaseAt']) ?? null,
-            totalPurchased: Number(x.totalPurchased ?? 0),
-            purchaseCount: Number(x.purchaseCount ?? 0),
-            avgTicket: Number(x.avgTicket ?? 0),
-            notes: String(x.notes ?? ''),
-          }
-        }),
-      )
+      const list = snap.docs.map((d) => {
+        const x = d.data() as Record<string, unknown>
+        return {
+          id: d.id,
+          name: String(x.name ?? ''),
+          phone: String(x.phone ?? ''),
+          notes: String(x.notes ?? ''),
+          registeredAt: (x.registeredAt as Client['registeredAt']) ?? null,
+          lastPurchaseAt: (x.lastPurchaseAt as Client['lastPurchaseAt']) ?? null,
+          totalPurchased: Number(x.totalPurchased ?? 0),
+          purchaseCount: Number(x.purchaseCount ?? 0),
+          avgTicket: Number(x.avgTicket ?? 0),
+        }
+      })
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt', { sensitivity: 'base' }))
+      setRows(list)
     })
   }, [orgId])
 
@@ -41,9 +38,9 @@ export default function ClientListPage() {
     <div>
       <PageTitle
         title="Clientes"
-        subtitle="Cadastro e histórico agregado."
+        subtitle="Identificador automático. Nome, telefone e observações."
         actions={
-          <Link to="/app/clientes/novo">
+          <Link to="/app/cadastros/clientes/novo">
             <Button>Novo cliente</Button>
           </Link>
         }
@@ -52,9 +49,8 @@ export default function ClientListPage() {
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
             <tr>
-              <th className="px-3 py-2">Código</th>
               <th className="px-3 py-2">Nome</th>
-              <th className="hidden px-3 py-2 sm:table-cell">Cidade</th>
+              <th className="hidden px-3 py-2 sm:table-cell">Telefone</th>
               <th className="px-3 py-2 text-right">Total</th>
               <th className="px-3 py-2 text-right">Qtd</th>
             </tr>
@@ -62,13 +58,13 @@ export default function ClientListPage() {
           <tbody>
             {rows.map((c) => (
               <tr key={c.id} className="border-b border-zinc-100 dark:border-zinc-900">
-                <td className="px-3 py-2 font-mono text-xs">{c.code}</td>
                 <td className="px-3 py-2">
-                  <Link className="font-medium text-violet-700 hover:underline dark:text-violet-300" to={`/app/clientes/${c.id}`}>
-                    {c.name}
+                  <Link className="font-medium text-violet-700 hover:underline dark:text-violet-300" to={`/app/cadastros/clientes/${c.id}`}>
+                    {c.name || '—'}
                   </Link>
+                  <div className="mt-0.5 text-xs text-zinc-500 sm:hidden">{c.phone || '—'}</div>
                 </td>
-                <td className="hidden px-3 py-2 sm:table-cell">{c.city}</td>
+                <td className="hidden px-3 py-2 sm:table-cell">{c.phone || '—'}</td>
                 <td className="px-3 py-2 text-right">
                   {c.totalPurchased.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </td>

@@ -1,33 +1,36 @@
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 const nav = [
   { to: '/app', end: true, label: 'Resumo', icon: '◆' },
-  { to: '/app/clientes', label: 'Clientes', icon: '◎' },
-  { to: '/app/produtos', label: 'Produtos', icon: '▦' },
+  { to: '/app/cadastros/clientes', activePrefix: '/app/cadastros', label: 'Cadastros', icon: '▤' },
   { to: '/app/vendas', label: 'Vendas', icon: '☰' },
-  { to: '/app/entradas', label: 'Entradas', icon: '↓' },
-  { to: '/app/financeiro', label: 'Financeiro', icon: '¤' },
-  { to: '/app/config', label: 'Config', icon: '⚙' },
-]
+  { to: '/app/entradas', activePrefix: '/app/entradas', label: 'Entradas', icon: '↓' },
+  { to: '/app/financeiro', activePrefix: '/app/financeiro', label: 'Financeiro', icon: '¤' },
+] as const
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+  const location = useLocation()
   return (
     <>
       {nav.map((item) => (
         <NavLink
           key={item.to}
           to={item.to}
-          end={item.end}
+          end={'end' in item ? item.end : false}
           onClick={onNavigate}
-          className={({ isActive }) =>
-            `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
-              isActive
+          className={({ isActive }) => {
+            const active =
+              'activePrefix' in item && item.activePrefix
+                ? location.pathname.startsWith(item.activePrefix)
+                : isActive
+            return `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+              active
                 ? 'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-100'
                 : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900'
             }`
-          }
+          }}
         >
           <span className="w-5 text-center opacity-70" aria-hidden>
             {item.icon}
@@ -43,6 +46,7 @@ export default function AppLayout() {
   const { logout } = useAuth()
   const { organization, orgIds, setOrgId } = useOrg()
   const navigate = useNavigate()
+  const location = useLocation()
 
   return (
     <div className="flex min-h-dvh flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50 md:flex-row">
@@ -109,12 +113,17 @@ export default function AppLayout() {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `flex min-w-[4.5rem] shrink-0 flex-col items-center justify-center rounded-lg py-2 text-[10px] font-medium ${
-                  isActive ? 'text-violet-700 dark:text-violet-300' : 'text-zinc-500'
+              end={'end' in item ? item.end : false}
+              className={() => {
+                const active =
+                  'activePrefix' in item && item.activePrefix
+                    ? location.pathname.startsWith(item.activePrefix)
+                    : location.pathname === item.to ||
+                      (!('end' in item && item.end) && location.pathname.startsWith(`${item.to}/`))
+                return `flex min-w-[4.5rem] shrink-0 flex-col items-center justify-center rounded-lg py-2 text-[10px] font-medium ${
+                  active ? 'text-violet-700 dark:text-violet-300' : 'text-zinc-500'
                 }`
-              }
+              }}
             >
               <span className="text-sm" aria-hidden>
                 {item.icon}
