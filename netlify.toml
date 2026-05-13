@@ -2,7 +2,8 @@
 [build]
   base = "apps/web"
   command = "npm ci && npm run build"
-  publish = "apps/web/dist"
+  # Relativo ao base acima → repo/apps/web/dist (não repetir apps/web aqui)
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "20"
