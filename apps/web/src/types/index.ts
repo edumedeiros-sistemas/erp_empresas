@@ -11,6 +11,8 @@ export interface Organization {
 export interface OrgMember {
   role: MemberRole
   email: string | null
+  /** Igual ao UID do utilizador; usado em collection group `members`. */
+  memberUid?: string
   joinedAt?: Timestamp
 }
 

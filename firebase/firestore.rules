@@ -54,11 +54,13 @@ service cloud.firestore {
 
       match /members/{memberId} {
         allow read: if isOrgMember(orgId);
-        allow create: if isSignedIn() && (
+        allow create: if isSignedIn()
+          && request.resource.data.memberUid == memberId
+          && (
           isOwnerOrAdmin(orgId) ||
           (
             request.auth.uid == memberId
-            && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'inviteId'])
+            && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'inviteId', 'memberUid'])
             && pendingInviteOk(orgId, request.resource.data.inviteId)
             && request.resource.data.role == get(/databases/$(database)/documents/organizations/$(orgId)/invites/$(request.resource.data.inviteId)).data.role
           )

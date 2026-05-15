@@ -282,6 +282,7 @@ export default function OrgSelectPage() {
       b.set(memRef, {
         role: inv.role,
         email: user.email ?? null,
+        memberUid: user.uid,
         joinedAt: serverTimestamp(),
         inviteId: inv.id,
       })
@@ -371,6 +372,7 @@ export default function OrgSelectPage() {
       b.set(memRef, {
         role: 'staff',
         email: row.requesterEmail,
+        memberUid: row.requesterUid,
         joinedAt: serverTimestamp(),
       })
       b.update(reqRef, {

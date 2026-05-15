@@ -14,7 +14,6 @@ import {
   collection,
   collectionGroup,
   doc,
-  documentId,
   getDoc,
   getDocs,
   query,
@@ -68,7 +67,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       return
     }
     setLoadingList(true)
-    const q = query(collectionGroup(db, 'members'), where(documentId(), '==', user.uid))
+    const q = query(collectionGroup(db, 'members'), where('memberUid', '==', user.uid))
     const snap = await getDocs(q)
     const fromMembers = [
       ...new Set(
@@ -144,6 +143,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       await setDoc(doc(membersCol(db, oid), user.uid), {
         role: 'owner',
         email: user.email ?? null,
+        memberUid: user.uid,
         joinedAt: serverTimestamp(),
       })
 
