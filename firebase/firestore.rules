@@ -5,6 +5,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function authEmailLower() {
+      return request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
     function isOrgMember(orgId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
@@ -18,8 +24,27 @@ service cloud.firestore {
       return isOrgMember(orgId) && memberRole(orgId) in ['owner', 'admin'];
     }
 
+    function pendingInviteOk(orgId, inviteId) {
+      let inv = get(/databases/$(database)/documents/organizations/$(orgId)/invites/$(inviteId));
+      return inv.exists
+        && inv.data.status == 'pending'
+        && inv.data.emailLower == authEmailLower();
+    }
+
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /userPublicLookup/{uid} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /orgDirectory/{orgId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isOwnerOrAdmin(orgId);
+      allow delete: if isSignedIn() && isOwnerOrAdmin(orgId);
     }
 
     match /organizations/{orgId} {
@@ -30,10 +55,49 @@ service cloud.firestore {
       match /members/{memberId} {
         allow read: if isOrgMember(orgId);
         allow create: if isSignedIn() && (
-          request.auth.uid == memberId ||
-          isOwnerOrAdmin(orgId)
+          isOwnerOrAdmin(orgId) ||
+          (
+            request.auth.uid == memberId
+            && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'inviteId'])
+            && pendingInviteOk(orgId, request.resource.data.inviteId)
+            && request.resource.data.role == get(/databases/$(database)/documents/organizations/$(orgId)/invites/$(request.resource.data.inviteId)).data.role
+          )
         );
         allow update, delete: if isOwnerOrAdmin(orgId);
+      }
+
+      match /invites/{inviteId} {
+        allow read: if isOrgMember(orgId) ||
+          (isSignedIn() && resource.data.emailLower == authEmailLower());
+        allow create: if isOwnerOrAdmin(orgId);
+        allow update: if isOwnerOrAdmin(orgId) ||
+          (
+            isSignedIn()
+            && resource.data.emailLower == authEmailLower()
+            && resource.data.status == 'pending'
+            && request.resource.data.status in ['used', 'declined']
+            && request.resource.data.emailLower == resource.data.emailLower
+          );
+        allow delete: if isOwnerOrAdmin(orgId);
+      }
+
+      match /accessRequests/{reqId} {
+        allow read: if isSignedIn() && (
+          isOwnerOrAdmin(orgId) ||
+          resource.data.requesterUid == request.auth.uid
+        );
+        allow create: if isSignedIn()
+          && request.resource.data.requesterUid == request.auth.uid
+          && request.resource.data.status == 'pending'
+          && !exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid))
+          && request.resource.data.keys().hasAll(['requesterUid', 'requesterEmail', 'status', 'createdAt']);
+        allow update: if isOwnerOrAdmin(orgId)
+          && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.requesterUid == resource.data.requesterUid
+          && request.resource.data.requesterEmail == resource.data.requesterEmail
+          && request.resource.data.resolvedByUid == request.auth.uid;
+        allow delete: if isOwnerOrAdmin(orgId);
       }
 
       match /clients/{clientId} {

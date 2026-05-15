@@ -9,6 +9,7 @@ import PayablesPage from '@/pages/finance/PayablesPage'
 import ReceivablesPage from '@/pages/finance/ReceivablesPage'
 import LoginPage from '@/pages/LoginPage'
 import OrgSelectPage from '@/pages/OrgSelectPage'
+import RequestOrgAccessPage from '@/pages/RequestOrgAccessPage'
 import RegisterPage from '@/pages/RegisterPage'
 import ClientFormPage from '@/pages/clients/ClientFormPage'
 import ClientListPage from '@/pages/clients/ClientListPage'
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route element={<RequireAuth />}>
               <Route path="/orgs" element={<OrgSelectPage />} />
+              <Route path="/orgs/pedir-acesso" element={<RequestOrgAccessPage />} />
               <Route element={<RequireOrg />}>
                 <Route path="/app" element={<AppLayout />}>
                   <Route index element={<DashboardPage />} />

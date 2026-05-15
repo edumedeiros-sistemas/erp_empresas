@@ -16,7 +16,41 @@ export interface OrgMember {
 
 export interface UserProfile {
   email: string | null
+  /** Igual a `normalizeEmail(email)` quando definido. */
+  emailLower?: string
   orgIds: string[]
+}
+
+export type OrgInviteStatus = 'pending' | 'used' | 'declined' | 'cancelled'
+
+/** Convite para entrar numa organização (subcoleção `invites`). */
+export interface OrgInvite {
+  orgId: string
+  orgName: string
+  email: string
+  emailLower: string
+  role: MemberRole
+  status: OrgInviteStatus
+  invitedByUid: string
+  createdAt?: Timestamp
+}
+
+export type OrgAccessRequestStatus = 'pending' | 'approved' | 'rejected'
+
+/** Pedido de acesso a uma empresa (subcoleção `accessRequests`). */
+export interface OrgAccessRequest {
+  requesterUid: string
+  requesterEmail: string
+  status: OrgAccessRequestStatus
+  createdAt?: Timestamp
+  resolvedAt?: Timestamp | null
+  resolvedByUid?: string | null
+}
+
+/** Lista pública de empresas para pedido de acesso (nome). */
+export interface OrgDirectoryEntry {
+  name: string
+  updatedAt?: Timestamp
 }
 
 export interface Client {

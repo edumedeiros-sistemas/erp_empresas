@@ -3,6 +3,7 @@ import { defaultOrgSettings, emptyDashboardStats } from '@/lib/defaults'
 import {
   dashboardDoc,
   membersCol,
+  orgDirectoryDoc,
   orgDoc,
   settingsDoc,
   userDoc,
@@ -11,11 +12,16 @@ import type { Organization } from '@/types'
 import {
   arrayUnion,
   collection,
+  collectionGroup,
   doc,
+  documentId,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore'
 import {
   createContext,
@@ -62,9 +68,19 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       return
     }
     setLoadingList(true)
+    const q = query(collectionGroup(db, 'members'), where(documentId(), '==', user.uid))
+    const snap = await getDocs(q)
+    const fromMembers = [
+      ...new Set(
+        snap.docs
+          .map((d) => d.ref.parent.parent?.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ]
     const uref = userDoc(db, user.uid)
-    const snap = await getDoc(uref)
-    const ids: string[] = snap.exists() ? (snap.data().orgIds as string[]) ?? [] : []
+    const usnap = await getDoc(uref)
+    const legacy: string[] = usnap.exists() ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean) : []
+    const ids = [...new Set([...fromMembers, ...legacy])]
     setOrgIds(ids)
     setLoadingList(false)
   }, [user])
@@ -129,6 +145,11 @@ export function OrgProvider({ children }: { children: ReactNode }) {
         role: 'owner',
         email: user.email ?? null,
         joinedAt: serverTimestamp(),
+      })
+
+      await setDoc(orgDirectoryDoc(db, oid), {
+        name: name.trim(),
+        updatedAt: serverTimestamp(),
       })
 
       await setDoc(settingsDoc(db, oid), defaultOrgSettings())

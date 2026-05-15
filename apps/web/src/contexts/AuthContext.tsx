@@ -1,5 +1,6 @@
 import { auth, db } from '@/firebase'
-import { userDoc } from '@/lib/firestorePaths'
+import { userDoc, userPublicLookupDoc } from '@/lib/firestorePaths'
+import { normalizeEmail } from '@/lib/emailNormalize'
 import type { User } from 'firebase/auth'
 import {
   createUserWithEmailAndPassword,
@@ -31,12 +32,31 @@ const AuthContext = createContext<AuthValue | null>(null)
 async function ensureUserProfile(uid: string, email: string | null) {
   const ref = userDoc(db, uid)
   const snap = await getDoc(ref)
+  const emailLower = email ? normalizeEmail(email) : ''
+  const base = {
+    email,
+    emailLower: emailLower || null,
+    updatedAt: serverTimestamp(),
+  }
   if (!snap.exists()) {
     await setDoc(ref, {
-      email,
+      ...base,
       orgIds: [],
       createdAt: serverTimestamp(),
     })
+  } else {
+    await setDoc(ref, base, { merge: true })
+  }
+  if (email && emailLower) {
+    await setDoc(
+      userPublicLookupDoc(db, uid),
+      {
+        email,
+        emailLower,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    )
   }
 }
 

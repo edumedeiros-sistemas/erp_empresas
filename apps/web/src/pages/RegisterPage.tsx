@@ -60,6 +60,10 @@ export default function RegisterPage() {
             Entrar
           </Link>
         </p>
+        <p className="mt-3 text-center text-sm text-zinc-600 dark:text-zinc-400">
+          Depois de criar a conta e entrar, em <strong className="font-medium">Organizações</strong> use{' '}
+          <strong className="font-medium">Pedir acesso a empresa</strong> para solicitar entrada numa equipa existente.
+        </p>
       </Card>
     </div>
   )
