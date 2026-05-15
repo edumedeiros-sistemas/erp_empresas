@@ -53,7 +53,9 @@ service cloud.firestore {
       allow update, delete: if isOwnerOrAdmin(orgId);
 
       match /members/{memberId} {
-        allow read: if isOrgMember(orgId);
+        // Membro pode ler o próprio documento em qualquer org (necessário para collection group
+        // com memberUid); membros da org leem todos os membros.
+        allow read: if isOrgMember(orgId) || (isSignedIn() && memberId == request.auth.uid);
         allow create: if isSignedIn()
           && request.resource.data.memberUid == memberId
           && (

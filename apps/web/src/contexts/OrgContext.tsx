@@ -67,15 +67,21 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       return
     }
     setLoadingList(true)
-    const q = query(collectionGroup(db, 'members'), where('memberUid', '==', user.uid))
-    const snap = await getDocs(q)
-    const fromMembers = [
-      ...new Set(
-        snap.docs
-          .map((d) => d.ref.parent.parent?.id)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ]
+    let fromMembers: string[] = []
+    try {
+      const q = query(collectionGroup(db, 'members'), where('memberUid', '==', user.uid))
+      const snap = await getDocs(q)
+      fromMembers = [
+        ...new Set(
+          snap.docs
+            .map((d) => d.ref.parent.parent?.id)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ]
+    } catch {
+      /* Permissões / índice: continua só com orgIds no documento users. */
+      fromMembers = []
+    }
     const uref = userDoc(db, user.uid)
     const usnap = await getDoc(uref)
     const legacy: string[] = usnap.exists() ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean) : []
