@@ -1,6 +1,10 @@
 import { db } from '@/firebase'
 import { defaultOrgSettings, emptyDashboardStats } from '@/lib/defaults'
-import { filterExistingOrgIds } from '@/lib/orgMembershipSync'
+import {
+  filterExistingOrgIds,
+  listMembershipOrgIdsForUser,
+  verifyMembershipOrgIds,
+} from '@/lib/orgMembershipSync'
 import {
   dashboardDoc,
   membersCol,
@@ -10,19 +14,7 @@ import {
   userDoc,
 } from '@/lib/firestorePaths'
 import type { Organization } from '@/types'
-import {
-  arrayUnion,
-  collection,
-  collectionGroup,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-} from 'firebase/firestore'
+import { arrayUnion, collection, doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
 import {
   createContext,
   useCallback,
@@ -68,26 +60,13 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       return
     }
     setLoadingList(true)
-    let fromMembers: string[] = []
-    try {
-      const q = query(collectionGroup(db, 'members'), where('memberUid', '==', user.uid))
-      const snap = await getDocs(q)
-      fromMembers = [
-        ...new Set(
-          snap.docs
-            .map((d) => d.ref.parent.parent?.id)
-            .filter((id): id is string => Boolean(id)),
-        ),
-      ]
-    } catch {
-      /* Permissões / índice: continua só com orgIds no documento users. */
-      fromMembers = []
-    }
+    const fromMembers = await listMembershipOrgIdsForUser(user.uid)
     const uref = userDoc(db, user.uid)
     const usnap = await getDoc(uref)
     const legacy: string[] = usnap.exists() ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean) : []
     const merged = [...new Set([...fromMembers, ...legacy])]
-    const ids = await filterExistingOrgIds(merged)
+    const withMemberDoc = await verifyMembershipOrgIds(user.uid, merged)
+    const ids = await filterExistingOrgIds(withMemberDoc)
     if (usnap.exists() && ids.length !== merged.length) {
       try {
         await updateDoc(uref, { orgIds: ids })

@@ -1,5 +1,11 @@
 import { db } from '@/firebase'
-import { membersCol, orgDoc, userDoc, userPublicLookupDoc } from '@/lib/firestorePaths'
+import {
+  membersCol,
+  orgDoc,
+  organizationsCol,
+  userDoc,
+  userPublicLookupDoc,
+} from '@/lib/firestorePaths'
 import { normalizeEmail } from '@/lib/emailNormalize'
 import type { MemberRole } from '@/types'
 import {
@@ -49,45 +55,46 @@ export async function stripOrgIdFromUserProfiles(orgId: string, userIds: string[
 }
 
 /**
+ * Lista empresas do utilizador (super-admin): percorre organizations e faz get em members/{uid}.
+ * Evita collection group, que falha em permissões ao listar membros de outro UID.
+ */
+export async function listUserMembershipsForAdmin(uid: string): Promise<UserMembershipRow[]> {
+  const orgsSnap = await getDocs(organizationsCol(db))
+  const rows: UserMembershipRow[] = []
+  for (const org of orgsSnap.docs) {
+    const orgId = org.id
+    const orgName = String((org.data().name as string) ?? orgId)
+    const memSnap = await getDoc(doc(membersCol(db, orgId), uid))
+    if (!memSnap.exists()) continue
+    const x = memSnap.data() as Record<string, unknown>
+    rows.push({
+      orgId,
+      orgName,
+      role: (x.role as MemberRole) ?? 'staff',
+    })
+  }
+  rows.sort((a, b) => a.orgName.localeCompare(b.orgName, 'pt-BR'))
+  return rows
+}
+
+/** @deprecated Use listUserMembershipsForAdmin — mantido como alias. */
+export async function listUserMemberships(uid: string): Promise<UserMembershipRow[]> {
+  return listUserMembershipsForAdmin(uid)
+}
+
+/**
  * Reconstrói users.orgIds a partir dos documentos members ativos (fonte de verdade).
  * Remove IDs de empresas já apagadas.
  */
 export async function repairUserOrgIdsFromMembers(uid: string): Promise<string[]> {
-  const q = query(collectionGroup(db, 'members'), where('memberUid', '==', uid))
-  const snap = await getDocs(q)
-  const fromMembers = [
-    ...new Set(
-      snap.docs
-        .map((d) => d.ref.parent.parent?.id)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ]
-  const orgIds = await filterExistingOrgIds(fromMembers)
+  const rows = await listUserMembershipsForAdmin(uid)
+  const orgIds = await filterExistingOrgIds(rows.map((r) => r.orgId))
   const uref = userDoc(db, uid)
   const us = await getDoc(uref)
   if (us.exists()) {
     await updateDoc(uref, { orgIds })
   }
   return orgIds
-}
-
-export async function listUserMemberships(uid: string): Promise<UserMembershipRow[]> {
-  const q = query(collectionGroup(db, 'members'), where('memberUid', '==', uid))
-  const snap = await getDocs(q)
-  const rows: UserMembershipRow[] = []
-  for (const d of snap.docs) {
-    const orgId = d.ref.parent.parent?.id
-    if (!orgId) continue
-    const x = d.data() as Record<string, unknown>
-    const orgSnap = await getDoc(orgDoc(db, orgId))
-    rows.push({
-      orgId,
-      orgName: orgSnap.exists() ? String((orgSnap.data().name as string) ?? orgId) : orgId,
-      role: (x.role as MemberRole) ?? 'staff',
-    })
-  }
-  rows.sort((a, b) => a.orgName.localeCompare(b.orgName, 'pt-BR'))
-  return rows
 }
 
 export async function updateUserEmailAdmin(uid: string, email: string): Promise<void> {
@@ -106,11 +113,11 @@ export async function updateUserEmailAdmin(uid: string, email: string): Promise<
     { merge: true },
   )
 
-  const snap = await getDocs(query(collectionGroup(db, 'members'), where('memberUid', '==', uid)))
-  if (!snap.empty) {
+  const memberships = await listUserMembershipsForAdmin(uid)
+  if (memberships.length > 0) {
     const batch = writeBatch(db)
-    for (const d of snap.docs) {
-      batch.update(d.ref, { email: trimmed })
+    for (const m of memberships) {
+      batch.update(doc(membersCol(db, m.orgId), uid), { email: trimmed })
     }
     await batch.commit()
   }
@@ -128,11 +135,11 @@ export async function removeUserFromOrgMembership(uid: string, orgId: string): P
 
 /** Apaga perfil Firestore e membros em todas as empresas (não remove conta Firebase Auth). */
 export async function deleteUserFirestoreData(uid: string): Promise<void> {
-  const snap = await getDocs(query(collectionGroup(db, 'members'), where('memberUid', '==', uid)))
+  const memberships = await listUserMembershipsForAdmin(uid)
   let batch = writeBatch(db)
   let n = 0
-  for (const d of snap.docs) {
-    batch.delete(d.ref)
+  for (const m of memberships) {
+    batch.delete(doc(membersCol(db, m.orgId), uid))
     n++
     if (n >= 400) {
       await batch.commit()
@@ -143,4 +150,34 @@ export async function deleteUserFirestoreData(uid: string): Promise<void> {
   if (n > 0) await batch.commit()
   await deleteDoc(userDoc(db, uid))
   await deleteDoc(userPublicLookupDoc(db, uid)).catch(() => {})
+}
+
+/** IDs de org onde o utilizador tem documento member (para refreshOrgs do próprio user). */
+export async function listMembershipOrgIdsForUser(uid: string): Promise<string[]> {
+  try {
+    const snap = await getDocs(
+      query(collectionGroup(db, 'members'), where('memberUid', '==', uid)),
+    )
+    return [
+      ...new Set(
+        snap.docs
+          .map((d) => d.ref.parent.parent?.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ]
+  } catch {
+    return []
+  }
+}
+
+/** Confirma orgIds com documento member existente (remove fantasmas do perfil). */
+export async function verifyMembershipOrgIds(uid: string, orgIds: string[]): Promise<string[]> {
+  const verified: string[] = []
+  for (const orgId of orgIds) {
+    const orgSnap = await getDoc(orgDoc(db, orgId))
+    if (!orgSnap.exists()) continue
+    const memSnap = await getDoc(doc(membersCol(db, orgId), uid))
+    if (memSnap.exists()) verified.push(orgId)
+  }
+  return verified
 }

@@ -3,7 +3,7 @@ import { db } from '@/firebase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   deleteUserFirestoreData,
-  listUserMemberships,
+  listUserMembershipsForAdmin,
   repairUserOrgIdsFromMembers,
   removeUserFromOrgMembership,
   updateUserEmailAdmin,
@@ -56,7 +56,7 @@ export default function AdminUserDetailPage() {
       const data = us.data() as Record<string, unknown>
       setEmail(String(data.email ?? ''))
       setProfileOrgIds((data.orgIds as string[] | undefined) ?? [])
-      setMemberships(await listUserMemberships(uid))
+      setMemberships(await listUserMembershipsForAdmin(uid))
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Erro ao carregar.')
     } finally {
