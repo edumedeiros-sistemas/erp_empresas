@@ -1,7 +1,7 @@
 import { Card, Field, Input, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
-import { userDoc, userPublicLookupCol } from '@/lib/firestorePaths'
-import { getDoc, getDocs, limit, query } from 'firebase/firestore'
+import { usersCol } from '@/lib/firestorePaths'
+import { getDocs, limit, query } from 'firebase/firestore'
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -12,32 +12,36 @@ const MAX = 400
 export default function AdminUsersPage() {
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       setLoading(true)
+      setLoadErr(null)
       try {
-        const snap = await getDocs(query(userPublicLookupCol(db), limit(MAX)))
+        const snap = await getDocs(query(usersCol(db), limit(MAX)))
         if (cancelled) return
-        const base: Row[] = snap.docs.map((d) => {
+        const list: Row[] = snap.docs.map((d) => {
           const x = d.data() as Record<string, unknown>
+          const email = String(x.email ?? '')
+          const emailLower = String(x.emailLower ?? email.trim().toLowerCase())
+          const orgIds = (x.orgIds as string[] | undefined) ?? []
           return {
             uid: d.id,
-            email: String(x.email ?? ''),
-            emailLower: String(x.emailLower ?? ''),
-            orgCount: 0,
+            email,
+            emailLower,
+            orgCount: orgIds.length,
           }
         })
-        base.sort((a, b) => a.emailLower.localeCompare(b.emailLower, 'pt-BR'))
-        const enriched: Row[] = []
-        for (const r of base) {
-          const uref = await getDoc(userDoc(db, r.uid))
-          const orgCount = uref.exists() ? ((uref.data() as { orgIds?: string[] }).orgIds ?? []).length : 0
-          enriched.push({ ...r, orgCount })
+        list.sort((a, b) => a.emailLower.localeCompare(b.emailLower, 'pt-BR'))
+        if (!cancelled) setRows(list)
+      } catch (e) {
+        if (!cancelled) {
+          setRows([])
+          setLoadErr(e instanceof Error ? e.message : 'Não foi possível carregar utilizadores.')
         }
-        if (!cancelled) setRows(enriched)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -62,7 +66,7 @@ export default function AdminUsersPage() {
     <div className="mx-auto max-w-3xl">
       <PageTitle
         title="Administrador — Utilizadores"
-        subtitle={`Até ${MAX} contas com perfil público (quem já entrou na app).`}
+        subtitle={`Até ${MAX} contas (coleção users). Só o administrador global vê esta lista.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Link
@@ -86,6 +90,12 @@ export default function AdminUsersPage() {
           <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Email ou UID…" />
         </Field>
       </Card>
+
+      {loadErr ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          {loadErr}
+        </p>
+      ) : null}
 
       {loading ? (
         <p className="text-sm text-zinc-500">A carregar…</p>
