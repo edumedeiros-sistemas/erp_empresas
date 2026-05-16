@@ -41,7 +41,9 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      // get: perfil próprio ou super-admin. list: só super-admin (getDocs na coleção usa list).
+      allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow list: if isSuperAdmin();
       allow create: if isSignedIn() && request.auth.uid == userId;
       allow update, delete: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
     }
