@@ -21,6 +21,8 @@ export default function SupplierFormPage() {
   const [phone, setPhone] = useState('')
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!orgId || isNew || !id) return
@@ -98,6 +100,22 @@ export default function SupplierFormPage() {
     }
   }
 
+  async function onDeleteSupplier() {
+    if (!orgId || !id || isNew) return
+    const label = tradeName.trim() || legalName.trim() || 'fornecedor'
+    if (!confirm(`Excluir o fornecedor «${label}»? Esta ação não pode ser desfeita.`)) return
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      await deleteDoc(doc(suppliersCol(db, orgId), id))
+      navigate('/app/cadastros/marcas')
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Não foi possível excluir.')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   return (
     <div>
       <PageTitle
@@ -142,11 +160,30 @@ export default function SupplierFormPage() {
           <Field label="Observações">
             <TextArea value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>
-          <Button type="submit" disabled={busy}>
+          <Button type="submit" disabled={busy || deleteBusy}>
             Guardar
           </Button>
         </form>
       </Card>
+
+      {!isNew && id ? (
+        <Card className="mt-6 max-w-xl border-red-200 bg-red-50/30 dark:border-red-900 dark:bg-red-950/20">
+          <h2 className="text-sm font-semibold text-red-900 dark:text-red-200">Excluir fornecedor</h2>
+          <p className="mt-1 text-sm text-red-900/90 dark:text-red-200/90">
+            Remove este cadastro da lista. Os produtos que usam o nome da marca como texto não são alterados automaticamente.
+          </p>
+          {deleteError ? <p className="mt-2 text-sm text-red-700 dark:text-red-300">{deleteError}</p> : null}
+          <Button
+            type="button"
+            variant="danger"
+            className="mt-3"
+            disabled={busy || deleteBusy}
+            onClick={() => void onDeleteSupplier()}
+          >
+            {deleteBusy ? 'A excluir…' : 'Excluir fornecedor'}
+          </Button>
+        </Card>
+      ) : null}
     </div>
   )
 }
