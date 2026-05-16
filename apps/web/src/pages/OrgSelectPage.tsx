@@ -8,13 +8,13 @@ import {
   orgDoc,
   userDoc,
   userPublicLookupCol,
+  userPublicLookupDoc,
 } from '@/lib/firestorePaths'
 import { normalizeEmail } from '@/lib/emailNormalize'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
-import type { MemberRole, OrgAccessRequest, OrgInvite } from '@/types'
+import type { MemberRole, OrgAccessRequest } from '@/types'
 import {
-  addDoc,
   arrayUnion,
   collectionGroup,
   doc,
@@ -30,7 +30,8 @@ import {
   limit,
 } from 'firebase/firestore'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import type { OrgListNavState } from '@/lib/orgNav'
 
 type ReceivedInvite = {
   id: string
@@ -52,6 +53,7 @@ export default function OrgSelectPage() {
   const { user, logout } = useAuth()
   const { orgIds, setOrgId, createOrganization, loadingList, refreshOrgs } = useOrg()
   const navigate = useNavigate()
+  const location = useLocation()
   const [names, setNames] = useState<Record<string, string>>({})
   const [roles, setRoles] = useState<Record<string, MemberRole | null>>({})
   const [newName, setNewName] = useState('')
@@ -62,11 +64,11 @@ export default function OrgSelectPage() {
   const [manageOrgId, setManageOrgId] = useState<string | null>(null)
 
   const [inviteEmail, setInviteEmail] = useState('')
+  const [selectedMemberUid, setSelectedMemberUid] = useState<string | null>(null)
   const [inviteRole, setInviteRole] = useState<MemberRole>('staff')
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<{ uid: string; email: string; emailLower: string }[]>([])
-  const [sentInvites, setSentInvites] = useState<(OrgInvite & { id: string })[]>([])
   const [accessRequests, setAccessRequests] = useState<AccessReqRow[]>([])
 
   const myEmailLower = useMemo(() => normalizeEmail(user?.email ?? ''), [user?.email])
@@ -156,25 +158,6 @@ export default function OrgSelectPage() {
       const role = roles[orgId]
       if (role !== 'owner' && role !== 'admin') return () => {}
 
-      const qInv = query(invitesCol(db, orgId), where('status', '==', 'pending'))
-      const unsubInv = onSnapshot(qInv, (snap) => {
-        const rows = snap.docs.map((d) => {
-          const x = d.data() as Record<string, unknown>
-          return {
-            id: d.id,
-            orgId: String(x.orgId ?? orgId),
-            orgName: String(x.orgName ?? ''),
-            email: String(x.email ?? ''),
-            emailLower: String(x.emailLower ?? ''),
-            role: (x.role as MemberRole) ?? 'staff',
-            status: (x.status as OrgInvite['status']) ?? 'pending',
-            invitedByUid: String(x.invitedByUid ?? ''),
-            createdAt: x.createdAt as OrgInvite['createdAt'],
-          }
-        })
-        setSentInvites(rows)
-      })
-
       const qReq = query(accessRequestsCol(db, orgId), where('status', '==', 'pending'))
       const unsubReq = onSnapshot(qReq, (snap) => {
         setAccessRequests(
@@ -194,7 +177,6 @@ export default function OrgSelectPage() {
       })
 
       return () => {
-        unsubInv()
         unsubReq()
       }
     },
@@ -203,7 +185,6 @@ export default function OrgSelectPage() {
 
   useEffect(() => {
     if (!manageOrgId) {
-      setSentInvites([])
       setAccessRequests([])
       return
     }
@@ -214,7 +195,7 @@ export default function OrgSelectPage() {
 
   useEffect(() => {
     const raw = inviteEmail.trim().toLowerCase()
-    if (raw.length < 2) {
+    if (raw.length < 1) {
       setSuggestions([])
       return
     }
@@ -229,7 +210,10 @@ export default function OrgSelectPage() {
           )
           const snap = await getDocs(q)
           setSuggestions(
-            snap.docs.slice(0, 15).map((d) => {
+            snap.docs
+              .filter((d) => d.id !== user?.uid)
+              .slice(0, 15)
+              .map((d) => {
               const x = d.data() as Record<string, unknown>
               return {
                 uid: d.id,
@@ -244,7 +228,7 @@ export default function OrgSelectPage() {
       })()
     }, 220)
     return () => clearTimeout(t)
-  }, [inviteEmail])
+  }, [inviteEmail, user?.uid])
 
   function openOrg(id: string) {
     setOrgId(id)
@@ -308,55 +292,76 @@ export default function OrgSelectPage() {
     }
   }
 
-  async function cancelSentInvite(orgId: string, inviteId: string) {
-    setInviteError(null)
-    try {
-      await updateDoc(doc(invitesCol(db, orgId), inviteId), { status: 'cancelled' })
-    } catch (err) {
-      setInviteError(err instanceof Error ? err.message : 'Não foi possível cancelar.')
-    }
+  async function resolveUidByEmail(lower: string): Promise<{ uid: string; email: string } | null> {
+    const q = query(userPublicLookupCol(db), where('emailLower', '==', lower), limit(1))
+    const snap = await getDocs(q)
+    if (snap.empty) return null
+    const d = snap.docs[0]!
+    const x = d.data() as Record<string, unknown>
+    return { uid: d.id, email: String(x.email ?? lower) }
   }
 
-  async function sendInvite(orgId: string) {
+  async function addMemberToOrg(orgId: string) {
     if (!user) return
-    const email = inviteEmail.trim()
-    const lower = normalizeEmail(email)
+    const emailTrim = inviteEmail.trim()
+    const lower = normalizeEmail(emailTrim)
     setInviteError(null)
-    if (!email || !lower) {
-      setInviteError('Indique um email válido.')
+    if (!emailTrim || !lower) {
+      setInviteError('Indique o email do utilizador.')
       return
     }
     if (lower === myEmailLower) {
-      setInviteError('Não pode convidar o próprio email.')
+      setInviteError('Não pode adicionar a si próprio.')
       return
     }
     setInviteBusy(true)
     try {
-      const dup = query(
-        invitesCol(db, orgId),
-        where('emailLower', '==', lower),
-        where('status', '==', 'pending'),
-      )
-      const dupSnap = await getDocs(dup)
-      if (!dupSnap.empty) {
-        setInviteError('Já existe um convite pendente para este email.')
-        setInviteBusy(false)
+      let targetUid: string | null = selectedMemberUid
+      let memberEmail = emailTrim
+
+      if (targetUid) {
+        const lsnap = await getDoc(userPublicLookupDoc(db, targetUid))
+        if (lsnap.exists()) {
+          const xl = lsnap.data() as Record<string, unknown>
+          if (normalizeEmail(String(xl.emailLower ?? '')) === lower) {
+            memberEmail = String(xl.email ?? emailTrim)
+          }
+        }
+      } else {
+        const resolved = await resolveUidByEmail(lower)
+        if (!resolved) {
+          setInviteError(
+            'Nenhuma conta encontrada com este email. A pessoa tem de criar conta e entrar na app pelo menos uma vez.',
+          )
+          return
+        }
+        targetUid = resolved.uid
+        memberEmail = resolved.email
+      }
+
+      if (!targetUid || targetUid === user.uid) {
+        setInviteError('Não pode adicionar a si próprio.')
         return
       }
-      await addDoc(invitesCol(db, orgId), {
-        orgId,
-        orgName: names[orgId] ?? 'Empresa',
-        email,
-        emailLower: lower,
-        role: inviteRole === 'owner' ? 'staff' : inviteRole,
-        status: 'pending',
-        invitedByUid: user.uid,
-        createdAt: serverTimestamp(),
+      const memRef = doc(membersCol(db, orgId), targetUid)
+      const existing = await getDoc(memRef)
+      if (existing.exists()) {
+        setInviteError('Este utilizador já é membro desta empresa.')
+        return
+      }
+      const role = inviteRole === 'owner' ? 'staff' : inviteRole
+      await setDoc(memRef, {
+        role,
+        email: memberEmail,
+        memberUid: targetUid,
+        joinedAt: serverTimestamp(),
       })
       setInviteEmail('')
+      setSelectedMemberUid(null)
       setInviteRole('staff')
+      setSuggestions([])
     } catch (err) {
-      setInviteError(err instanceof Error ? err.message : 'Não foi possível enviar o convite.')
+      setInviteError(err instanceof Error ? err.message : 'Não foi possível adicionar o utilizador.')
     } finally {
       setInviteBusy(false)
     }
@@ -400,20 +405,51 @@ export default function OrgSelectPage() {
     }
   }
 
-  function pickSuggestion(s: { email: string }) {
+  function pickSuggestion(s: { uid: string; email: string }) {
     setInviteEmail(s.email)
+    setSelectedMemberUid(s.uid)
     setSuggestions([])
+  }
+
+  useEffect(() => {
+    setInviteEmail('')
+    setSelectedMemberUid(null)
+    setInviteError(null)
+    setSuggestions([])
+    setInviteRole('staff')
+  }, [manageOrgId])
+
+  function handleBack() {
+    const state = location.state as OrgListNavState | undefined
+    const from = state?.from
+    const previousOrgId = state?.previousOrgId
+
+    if (from && /^\/app(\/|$)/.test(from)) {
+      if (previousOrgId) setOrgId(previousOrgId)
+      navigate(from, { replace: false })
+      return
+    }
+    if (from && from !== location.pathname) {
+      navigate(from)
+      return
+    }
+    navigate(-1)
   }
 
   return (
     <div className="mx-auto max-w-lg px-4 py-10">
       <PageTitle
         title="Organizações"
-        subtitle="Escolha a empresa, convide equipa ou peça acesso a outra."
+        subtitle="Escolha a empresa, adicione utilizadores à equipa ou peça acesso a outra."
         actions={
-          <Button variant="ghost" type="button" onClick={() => void logout().then(() => navigate('/login'))}>
-            Sair
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" type="button" onClick={handleBack}>
+              Voltar
+            </Button>
+            <Button variant="ghost" type="button" onClick={() => void logout().then(() => navigate('/login'))}>
+              Sair
+            </Button>
+          </div>
         }
       />
 
@@ -469,7 +505,10 @@ export default function OrgSelectPage() {
             const canManage = roles[id] === 'owner' || roles[id] === 'admin'
             const expanded = manageOrgId === id
             return (
-              <li key={id} className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <li
+                key={id}
+                className="overflow-visible rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+              >
                 <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
                   <button
                     type="button"
@@ -495,7 +534,7 @@ export default function OrgSelectPage() {
                   </div>
                 </div>
                 {expanded && canManage ? (
-                  <div className="border-t border-zinc-100 px-3 py-3 dark:border-zinc-800">
+                  <div className="relative z-10 overflow-visible border-t border-zinc-100 px-3 py-3 dark:border-zinc-800">
                     {inviteError ? <p className="mb-2 text-xs text-red-600">{inviteError}</p> : null}
 
                     {accessRequests.length > 0 ? (
@@ -527,60 +566,50 @@ export default function OrgSelectPage() {
                       </div>
                     ) : null}
 
-                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Convidar por email</h3>
-                    <div className="relative space-y-2">
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Adicionar utilizador (conta já existente na app)
+                    </h3>
+                    <div className="space-y-2">
                       <Field label="Email do utilizador">
-                        <Input
-                          type="email"
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          placeholder="nome@email.com"
-                          autoComplete="off"
-                        />
+                        <div className="relative z-30">
+                          <Input
+                            type="email"
+                            value={inviteEmail}
+                            onChange={(e) => {
+                              setInviteEmail(e.target.value)
+                              setSelectedMemberUid(null)
+                            }}
+                            placeholder="Comece a escrever o email…"
+                            autoComplete="off"
+                          />
+                          {suggestions.length > 0 ? (
+                            <ul className="absolute left-0 right-0 top-full z-[100] mt-1 max-h-48 overflow-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+                              {suggestions.map((s) => (
+                                <li key={s.uid}>
+                                  <button
+                                    type="button"
+                                    className="w-full px-3 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => pickSuggestion(s)}
+                                  >
+                                    {s.email}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
                       </Field>
-                      {suggestions.length > 0 ? (
-                        <ul className="absolute z-10 mt-1 max-h-40 w-full overflow-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-                          {suggestions.map((s) => (
-                            <li key={s.uid}>
-                              <button
-                                type="button"
-                                className="w-full px-3 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                                onClick={() => pickSuggestion(s)}
-                              >
-                                {s.email}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      <Field label="Função no convite">
+                      <Field label="Função na empresa">
                         <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as MemberRole)}>
                           <option value="staff">Equipa</option>
                           <option value="admin">Administrador</option>
                         </Select>
                       </Field>
-                      <Button type="button" disabled={inviteBusy} onClick={() => void sendInvite(id)}>
-                        {inviteBusy ? 'A enviar…' : 'Enviar convite'}
+                      <Button type="button" disabled={inviteBusy} onClick={() => void addMemberToOrg(id)}>
+                        {inviteBusy ? 'A adicionar…' : 'Adicionar à empresa'}
                       </Button>
                     </div>
-
-                    {sentInvites.length > 0 ? (
-                      <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Convites pendentes</h3>
-                        <ul className="space-y-1">
-                          {sentInvites.map((s) => (
-                            <li key={s.id} className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-                              <span>
-                                {s.email} · {roleLabel(s.role)}
-                              </span>
-                              <Button type="button" variant="ghost" className="text-xs py-0.5" onClick={() => void cancelSentInvite(id, s.id)}>
-                                Cancelar
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
               </li>

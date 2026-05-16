@@ -1,5 +1,6 @@
 import { AuthProvider } from '@/contexts/AuthContext'
 import { OrgProvider } from '@/contexts/OrgContext'
+import AdminLayout from '@/layouts/AdminLayout'
 import AppLayout from '@/layouts/AppLayout'
 import CadastrosLayout from '@/layouts/CadastrosLayout'
 import DashboardPage from '@/pages/DashboardPage'
@@ -22,7 +23,10 @@ import SaleNewPage from '@/pages/sales/SaleNewPage'
 import EntradasLayout from '@/layouts/EntradasLayout'
 import NfeImportPage from '@/pages/stock/NfeImportPage'
 import StockEntriesPage from '@/pages/stock/StockEntriesPage'
-import { RequireAuth, RequireOrg } from '@/routes/Guards'
+import AdminOrgDetailPage from '@/pages/admin/AdminOrgDetailPage'
+import AdminOrgsPage from '@/pages/admin/AdminOrgsPage'
+import AdminUsersPage from '@/pages/admin/AdminUsersPage'
+import { RequireAuth, RequireOrg, RequireSuperAdmin } from '@/routes/Guards'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 
 function LegacyClientesIdRedirect() {
@@ -52,6 +56,14 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route path="/orgs" element={<OrgSelectPage />} />
               <Route path="/orgs/pedir-acesso" element={<RequestOrgAccessPage />} />
+              <Route element={<RequireSuperAdmin />}>
+                <Route path="/app/admin" element={<AdminLayout />}>
+                  <Route index element={<Navigate to="empresas" replace />} />
+                  <Route path="empresas" element={<AdminOrgsPage />} />
+                  <Route path="utilizadores" element={<AdminUsersPage />} />
+                  <Route path="empresa/:orgId" element={<AdminOrgDetailPage />} />
+                </Route>
+              </Route>
               <Route element={<RequireOrg />}>
                 <Route path="/app" element={<AppLayout />}>
                   <Route index element={<DashboardPage />} />

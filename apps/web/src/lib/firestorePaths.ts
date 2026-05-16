@@ -5,6 +5,10 @@ export function orgDoc(db: Firestore, orgId: string) {
   return doc(db, 'organizations', orgId)
 }
 
+export function organizationsCol(db: Firestore) {
+  return collection(db, 'organizations')
+}
+
 export function clientsCol(db: Firestore, orgId: string) {
   return collection(db, 'organizations', orgId, 'clients')
 }
@@ -71,6 +75,10 @@ export function userPublicLookupDoc(db: Firestore, uid: string) {
 
 export function userPublicLookupCol(db: Firestore) {
   return collection(db, 'userPublicLookup')
+}
+
+export function usersCol(db: Firestore) {
+  return collection(db, 'users')
 }
 
 export function orgDirectoryDoc(db: Firestore, orgId: string) {

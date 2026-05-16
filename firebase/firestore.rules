@@ -11,6 +11,15 @@ service cloud.firestore {
         : '';
     }
 
+    /** Igual a apps/web/src/lib/superAdmin.ts (SUPER_ADMIN_EMAIL_DEFAULT / VITE_ no cliente apenas). */
+    function superAdminEmailLower() {
+      return 'edu.netto.smedeiros@hotmail.com';
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && authEmailLower() == superAdminEmailLower();
+    }
+
     function isOrgMember(orgId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
@@ -32,49 +41,51 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update, delete: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
     }
 
     match /userPublicLookup/{uid} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && request.auth.uid == uid;
-      allow delete: if false;
+      allow delete: if isSuperAdmin();
     }
 
     match /orgDirectory/{orgId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isOwnerOrAdmin(orgId);
-      allow delete: if isSignedIn() && isOwnerOrAdmin(orgId);
+      allow create, update: if isSignedIn() && (isOwnerOrAdmin(orgId) || isSuperAdmin());
+      allow delete: if isSignedIn() && (isOwnerOrAdmin(orgId) || isSuperAdmin());
     }
 
     match /organizations/{orgId} {
-      allow read: if isOrgMember(orgId);
+      allow read: if isOrgMember(orgId) || isSuperAdmin();
       allow create: if isSignedIn();
-      allow update, delete: if isOwnerOrAdmin(orgId);
+      allow update, delete: if isOwnerOrAdmin(orgId) || isSuperAdmin();
 
       match /members/{memberId} {
-        // Membro pode ler o próprio documento em qualquer org (necessário para collection group
-        // com memberUid); membros da org leem todos os membros.
-        allow read: if isOrgMember(orgId) || (isSignedIn() && memberId == request.auth.uid);
+        allow read: if isOrgMember(orgId) || (isSignedIn() && memberId == request.auth.uid) || isSuperAdmin();
         allow create: if isSignedIn()
           && request.resource.data.memberUid == memberId
           && (
-          isOwnerOrAdmin(orgId) ||
-          (
-            request.auth.uid == memberId
-            && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'inviteId', 'memberUid'])
-            && pendingInviteOk(orgId, request.resource.data.inviteId)
-            && request.resource.data.role == get(/databases/$(database)/documents/organizations/$(orgId)/invites/$(request.resource.data.inviteId)).data.role
-          )
-        );
-        allow update, delete: if isOwnerOrAdmin(orgId);
+            (isSuperAdmin() && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'memberUid']))
+            || isOwnerOrAdmin(orgId)
+            || (
+              request.auth.uid == memberId
+              && request.resource.data.keys().hasAll(['role', 'email', 'joinedAt', 'inviteId', 'memberUid'])
+              && pendingInviteOk(orgId, request.resource.data.inviteId)
+              && request.resource.data.role == get(/databases/$(database)/documents/organizations/$(orgId)/invites/$(request.resource.data.inviteId)).data.role
+            )
+          );
+        allow update, delete: if isOwnerOrAdmin(orgId) || isSuperAdmin();
       }
 
       match /invites/{inviteId} {
         allow read: if isOrgMember(orgId) ||
-          (isSignedIn() && resource.data.emailLower == authEmailLower());
-        allow create: if isOwnerOrAdmin(orgId);
-        allow update: if isOwnerOrAdmin(orgId) ||
+          (isSignedIn() && resource.data.emailLower == authEmailLower()) ||
+          isSuperAdmin();
+        allow create: if isOwnerOrAdmin(orgId) || isSuperAdmin();
+        allow update: if isOwnerOrAdmin(orgId) || isSuperAdmin() ||
           (
             isSignedIn()
             && resource.data.emailLower == authEmailLower()
@@ -82,73 +93,76 @@ service cloud.firestore {
             && request.resource.data.status in ['used', 'declined']
             && request.resource.data.emailLower == resource.data.emailLower
           );
-        allow delete: if isOwnerOrAdmin(orgId);
+        allow delete: if isOwnerOrAdmin(orgId) || isSuperAdmin();
       }
 
       match /accessRequests/{reqId} {
         allow read: if isSignedIn() && (
           isOwnerOrAdmin(orgId) ||
-          resource.data.requesterUid == request.auth.uid
+          resource.data.requesterUid == request.auth.uid ||
+          isSuperAdmin()
         );
         allow create: if isSignedIn()
           && request.resource.data.requesterUid == request.auth.uid
           && request.resource.data.status == 'pending'
           && !exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid))
           && request.resource.data.keys().hasAll(['requesterUid', 'requesterEmail', 'status', 'createdAt']);
-        allow update: if isOwnerOrAdmin(orgId)
+        allow update: if isSuperAdmin() || (
+          isOwnerOrAdmin(orgId)
           && resource.data.status == 'pending'
           && request.resource.data.status in ['approved', 'rejected']
           && request.resource.data.requesterUid == resource.data.requesterUid
           && request.resource.data.requesterEmail == resource.data.requesterEmail
-          && request.resource.data.resolvedByUid == request.auth.uid;
-        allow delete: if isOwnerOrAdmin(orgId);
+          && request.resource.data.resolvedByUid == request.auth.uid
+        );
+        allow delete: if isOwnerOrAdmin(orgId) || isSuperAdmin();
       }
 
       match /clients/{clientId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /suppliers/{supplierId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /products/{productId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /productDrafts/{draftId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /supplierDrafts/{draftId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /sales/{saleId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
         match /items/{itemId} {
-          allow read, write: if isOrgMember(orgId);
+          allow read, write: if isOrgMember(orgId) || isSuperAdmin();
         }
       }
 
       match /stockMovements/{moveId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /financialTransactions/{txId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /payables/{payableId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /receivables/{receivableId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
 
       match /meta/{docId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isOrgMember(orgId) || isSuperAdmin();
       }
     }
   }
