@@ -72,7 +72,8 @@ export default function ProductFormPage() {
       setCost(String(uc))
       const fNfe = Number(x.nfeFreightPerUnit ?? 0)
       setFreight(fNfe > 0 ? String(fNfe) : '0')
-      setIpi('0')
+      const ipiNfe = Number(x.nfeIpiPerUnit ?? 0)
+      setIpi(ipiNfe > 0 ? String(ipiNfe) : '0')
       const sug = uc > 0 ? Math.round(uc * 1.8 * 100) / 100 : 0
       setSuggestedPrice(String(sug))
       setSalePrice(String(sug))

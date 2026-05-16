@@ -8,6 +8,8 @@ export interface NFeItemLine {
   qCom: number
   vUnCom: number
   vProd: number
+  /** Valor total de IPI da linha (det/imposto/IPI/.../vIPI). */
+  vIPI: number
 }
 
 export interface NFeDuplicata {
@@ -71,6 +73,34 @@ function parseXmlDecimal(s: string): number {
   t = t.replace(',', '.')
   const n = parseFloat(t)
   return Number.isFinite(n) ? n : 0
+}
+
+/** IPI total da linha (det/imposto/IPI). */
+function ipiFromDet(det: Element): number {
+  const imposto = [...det.children].find((c) => c.localName === 'imposto')
+  if (!imposto) return 0
+
+  const ipiRoot = [...imposto.children].find((c) => c.localName === 'IPI')
+  if (!ipiRoot) return 0
+
+  for (const block of [...ipiRoot.children]) {
+    if (block.localName !== 'IPITrib' && block.localName !== 'IPINT') continue
+    const vIPI = parseXmlDecimal(textChild(block, 'vIPI'))
+    if (vIPI > 0) return vIPI
+    const vBC = parseXmlDecimal(textChild(block, 'vBC'))
+    const pIPI = parseXmlDecimal(textChild(block, 'pIPI'))
+    if (vBC > 0 && pIPI > 0) {
+      return Math.round(((vBC * pIPI) / 100) * 100) / 100
+    }
+  }
+
+  for (const el of [...ipiRoot.getElementsByTagName('*')]) {
+    if (el.localName === 'vIPI') {
+      const v = parseXmlDecimal(el.textContent ?? '')
+      if (v > 0) return v
+    }
+  }
+  return 0
 }
 
 /** Tamanho comum na descrição (vestuário). */
@@ -245,6 +275,7 @@ export function parseNFeXml(xmlString: string): NFeParsed {
     const vProd = parseXmlDecimal(vpRaw) || qCom * vUnCom
     if (!cProd && !xProd) continue
     if (!xPedDoc.trim() && xPedItem.trim()) xPedDoc = xPedItem.trim()
+    const vIPI = ipiFromDet(det)
     items.push({
       nItem,
       cProd: cProd.trim(),
@@ -253,6 +284,7 @@ export function parseNFeXml(xmlString: string): NFeParsed {
       qCom: qCom > 0 ? qCom : 0,
       vUnCom,
       vProd,
+      vIPI,
     })
   }
 

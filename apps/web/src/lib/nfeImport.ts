@@ -132,6 +132,21 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     freightPerUnitByProduct.set(id, agg.qty > 0 ? agg.sum / agg.qty : 0)
   })
 
+  /** IPI por unidade a partir do vIPI de cada linha da NF-e. */
+  const ipiAgg = new Map<string, { sumVIpi: number; qty: number }>()
+  for (const { line, product } of matched) {
+    if (line.vIPI <= 0) continue
+    const id = product.id
+    const cur = ipiAgg.get(id) ?? { sumVIpi: 0, qty: 0 }
+    cur.sumVIpi += line.vIPI
+    cur.qty += line.qCom
+    ipiAgg.set(id, cur)
+  }
+  const ipiPerUnitByProduct = new Map<string, number>()
+  ipiAgg.forEach((agg, id) => {
+    ipiPerUnitByProduct.set(id, agg.qty > 0 ? agg.sumVIpi / agg.qty : 0)
+  })
+
   const stockByProduct = new Map<string, number>()
   for (const { line, product } of matched) {
     stockByProduct.set(product.id, (stockByProduct.get(product.id) ?? 0) + line.qCom)
@@ -174,18 +189,21 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     const pref = doc(productsCol(db, orgId), productId)
     const p = products.find((x) => x.id === productId)
     const base = p ?? { cost: 0, ipi: 0, freight: 0 }
-    if (freightPerLine > 0) {
-      const raw = freightPerUnitByProduct.get(productId) ?? base.freight
-      const nf = Math.round(raw * 100) / 100
-      const totalCost = Math.round((base.cost + nf + base.ipi) * 100) / 100
-      batch.update(pref, {
-        stock: increment(qtyAdd),
-        freight: nf,
-        totalCost,
-      })
-    } else {
-      batch.update(pref, { stock: increment(qtyAdd) })
+    const hasFreight = freightPerLine > 0
+    const hasIpi = ipiPerUnitByProduct.has(productId)
+    const nf = hasFreight
+      ? Math.round((freightPerUnitByProduct.get(productId) ?? base.freight) * 100) / 100
+      : base.freight
+    const ip = hasIpi
+      ? Math.round((ipiPerUnitByProduct.get(productId) ?? 0) * 100) / 100
+      : base.ipi
+    const patch: Record<string, unknown> = { stock: increment(qtyAdd) }
+    if (hasFreight) patch.freight = nf
+    if (hasIpi && ip > 0) patch.ipi = ip
+    if (hasFreight || (hasIpi && ip > 0)) {
+      patch.totalCost = Math.round((base.cost + nf + ip) * 100) / 100
     }
+    batch.update(pref, patch)
     ops++
     await commitIfFull()
   }
@@ -193,6 +211,7 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
   for (const { line, reason, guessedSize } of draftLines) {
     const draftRef = doc(productDraftsCol(db, orgId))
     const freightUnitDraft = freightPerLine > 0 && line.qCom > 0 ? freightPerLine / line.qCom : 0
+    const ipiUnitDraft = line.vIPI > 0 && line.qCom > 0 ? line.vIPI / line.qCom : 0
     const draftPayload: Record<string, unknown> = {
       code: line.cProd.trim(),
       name: line.xProd.trim(),
@@ -210,6 +229,7 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
       createdAt: serverTimestamp(),
     }
     if (freightUnitDraft > 0) draftPayload.nfeFreightPerUnit = freightUnitDraft
+    if (ipiUnitDraft > 0) draftPayload.nfeIpiPerUnit = Math.round(ipiUnitDraft * 100) / 100
     batch.set(draftRef, draftPayload)
     ops++
     draftsCreated++

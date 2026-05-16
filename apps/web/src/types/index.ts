@@ -178,6 +178,8 @@ export interface ProductDraft {
   matchNote?: string
   /** Frete por unidade rateado nesta linha (NF-e), para pré-preencher ao completar cadastro. */
   nfeFreightPerUnit?: number | null
+  /** IPI por unidade da linha (NF-e), para pré-preencher ao completar cadastro. */
+  nfeIpiPerUnit?: number | null
   createdAt?: Timestamp
 }
 

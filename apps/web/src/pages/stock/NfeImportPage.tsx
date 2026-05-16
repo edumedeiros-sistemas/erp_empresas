@@ -237,6 +237,10 @@ export default function NfeImportPage() {
             <strong className="text-zinc-800 dark:text-zinc-200">linha de item</strong>; em cada produto encontrado, o campo <strong className="text-zinc-800 dark:text-zinc-200">Frete</strong> passa a ser o frete por unidade dessa linha (e o custo total é recalculado). Nos pré-cadastros, o frete sugerido também é guardado.
           </li>
           <li>
+            O <strong className="text-zinc-800 dark:text-zinc-200">IPI de cada item</strong> (det/imposto/IPI) é lido por linha e gravado no campo{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">IPI</strong> do produto (valor por unidade = vIPI ÷ quantidade). Nos pré-cadastros, o IPI sugerido também é guardado.
+          </li>
+          <li>
             O <strong className="text-zinc-800 dark:text-zinc-200">emitente</strong> da nota (CNPJ, nome fantasia, razão social, IE) gera um{' '}
             <strong className="text-zinc-800 dark:text-zinc-200">pré-cadastro de fornecedor</strong> em Marcas, se ainda não existir fornecedor com o mesmo CNPJ/CPF; complete telefone e demais dados à mão.
           </li>
