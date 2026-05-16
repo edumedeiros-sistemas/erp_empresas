@@ -3,6 +3,7 @@ import { db } from '@/firebase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import { deleteOrganizationTree } from '@/lib/deleteOrgTree'
+import { repairUserOrgIdsFromMembers } from '@/lib/orgMembershipSync'
 import { normalizeEmail } from '@/lib/emailNormalize'
 import {
   membersCol,
@@ -255,8 +256,12 @@ export default function AdminOrgDetailPage() {
     setErr(null)
     setMsg(null)
     try {
-      await setDoc(userDoc(db, memberId), { orgIds: arrayUnion(oid) }, { merge: true })
-      setMsg('Vínculo users.orgIds atualizado para este utilizador.')
+      const repaired = await repairUserOrgIdsFromMembers(memberId)
+      if (!repaired.includes(oid)) {
+        setErr('Este utilizador não tem documento member nesta empresa. Adicione-o de novo.')
+        return
+      }
+      setMsg(`Vínculo reparado (${repaired.length} empresa(s) no perfil).`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Erro ao sincronizar.')
     }

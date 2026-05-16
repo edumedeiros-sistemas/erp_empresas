@@ -1,5 +1,6 @@
 import { db } from '@/firebase'
 import { defaultOrgSettings, emptyDashboardStats } from '@/lib/defaults'
+import { filterExistingOrgIds } from '@/lib/orgMembershipSync'
 import {
   dashboardDoc,
   membersCol,
@@ -85,13 +86,22 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     const uref = userDoc(db, user.uid)
     const usnap = await getDoc(uref)
     const legacy: string[] = usnap.exists() ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean) : []
-    const ids = [...new Set([...fromMembers, ...legacy])]
-    const missingInProfile = fromMembers.filter((id) => !legacy.includes(id))
-    if (missingInProfile.length > 0) {
+    const merged = [...new Set([...fromMembers, ...legacy])]
+    const ids = await filterExistingOrgIds(merged)
+    if (usnap.exists() && ids.length !== merged.length) {
       try {
-        await updateDoc(uref, { orgIds: arrayUnion(...missingInProfile) })
+        await updateDoc(uref, { orgIds: ids })
       } catch {
-        /* perfil users pode falhar; a lista já vem de members. */
+        /* limpar orgIds fantasma no perfil */
+      }
+    } else {
+      const missingInProfile = fromMembers.filter((id) => !legacy.includes(id) && ids.includes(id))
+      if (missingInProfile.length > 0) {
+        try {
+          await updateDoc(uref, { orgIds: arrayUnion(...missingInProfile) })
+        } catch {
+          /* perfil users pode falhar; a lista já vem de members. */
+        }
       }
     }
     setOrgIds(ids)
@@ -113,10 +123,23 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (!loadingList && orgId && orgIds.length > 0 && !orgIds.includes(orgId)) {
+    if (!loadingList && orgId && !orgIds.includes(orgId)) {
       setOrgId(null)
     }
   }, [loadingList, orgId, orgIds, setOrgId])
+
+  useEffect(() => {
+    if (!orgId || loadingList) return
+    let cancelled = false
+    void (async () => {
+      const snap = await getDoc(orgDoc(db, orgId))
+      if (cancelled) return
+      if (!snap.exists()) setOrgId(null)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [orgId, loadingList, setOrgId])
 
   useEffect(() => {
     if (!orgId) {

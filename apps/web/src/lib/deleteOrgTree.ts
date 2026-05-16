@@ -17,6 +17,7 @@ import {
   supplierDraftsCol,
   suppliersCol,
 } from '@/lib/firestorePaths'
+import { stripOrgIdFromUserProfiles } from '@/lib/orgMembershipSync'
 import type { CollectionReference } from 'firebase/firestore'
 import { collection, deleteDoc, getDocs, limit, query, writeBatch } from 'firebase/firestore'
 
@@ -36,6 +37,10 @@ async function deleteQueryInChunks(colRef: CollectionReference): Promise<void> {
 
 /** Apaga subcoleções conhecidas e o documento da organização (e orgDirectory). */
 export async function deleteOrganizationTree(orgId: string): Promise<void> {
+  const membersSnap = await getDocs(membersCol(db, orgId))
+  const memberUids = membersSnap.docs.map((d) => d.id)
+  await stripOrgIdFromUserProfiles(orgId, memberUids)
+
   await deleteQueryInChunks(membersCol(db, orgId))
   await deleteQueryInChunks(invitesCol(db, orgId))
   await deleteQueryInChunks(accessRequestsCol(db, orgId))
