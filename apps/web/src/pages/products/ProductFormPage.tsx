@@ -1,12 +1,12 @@
 import { Button, Card, Field, Input, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { deleteProductForOrg } from '@/lib/deleteProductForOrg'
+import { findSupplierByTaxId, supplierBrandLabel } from '@/lib/nfeSupplierLink'
 import {
   lastNfeMetaDoc,
   productDraftsCol,
   productsCol,
   supplierDraftsCol,
-  suppliersCol,
 } from '@/lib/firestorePaths'
 import { useOrg } from '@/contexts/OrgContext'
 import { deleteDoc, deleteField, doc, getDoc, getDocs, limit, query, setDoc, where } from 'firebase/firestore'
@@ -38,6 +38,9 @@ export default function ProductFormPage() {
   const [busy, setBusy] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [supplierId, setSupplierId] = useState<string | null>(null)
+  const [supplierBlocked, setSupplierBlocked] = useState(false)
+  const [linkedSupplierLabel, setLinkedSupplierLabel] = useState('')
 
   useEffect(() => {
     if (!orgId || isNew || !id) return
@@ -80,36 +83,61 @@ export default function ProductFormPage() {
       setFreight(fNfe > 0 ? String(fNfe) : '0')
       const ipiNfe = Number(x.nfeIpiPerUnit ?? 0)
       setIpi(ipiNfe > 0 ? String(ipiNfe) : '0')
-      let brandNfe = String(x.nfeEmitFantasia ?? x.nfeBrand ?? x.brand ?? '').trim()
       const chave = String(x.nfeChave ?? '').trim()
-      if (!brandNfe) {
+      const emitCnpj = String(x.nfeEmitCnpj ?? '').trim()
+      const draftSupplierId = String(x.supplierId ?? '').trim()
+
+      if (chave) {
+        const pendingSupplier = await getDocs(
+          query(supplierDraftsCol(db, orgId), where('nfeChave', '==', chave), limit(1)),
+        )
+        if (!pendingSupplier.empty) {
+          setSupplierBlocked(true)
+        }
+      }
+
+      let resolvedSupplierId = draftSupplierId
+      let resolved = resolvedSupplierId
+        ? null
+        : emitCnpj
+          ? await findSupplierByTaxId(db, orgId, emitCnpj)
+          : null
+      if (!resolvedSupplierId && resolved) resolvedSupplierId = resolved.id
+
+      if (!resolved && resolvedSupplierId) {
+        resolved = await findSupplierByTaxId(db, orgId, emitCnpj || '')
+      }
+      if (!resolved && !emitCnpj && chave) {
         const meta = await getDoc(lastNfeMetaDoc(db, orgId))
         if (meta.exists()) {
           const metaChave = String(meta.data()?.chave ?? '').trim()
-          const fantasia = String(meta.data()?.emitFantasia ?? '').trim()
-          if (fantasia && (!chave || metaChave === chave)) brandNfe = fantasia
-        }
-      }
-      if (!brandNfe && chave) {
-        const sd = await getDocs(
-          query(supplierDraftsCol(db, orgId), where('nfeChave', '==', chave), limit(1)),
-        )
-        if (!sd.empty) {
-          const s = sd.docs[0]!.data() as Record<string, unknown>
-          brandNfe = String(s.tradeName ?? '').trim()
-        }
-      }
-      if (!brandNfe) {
-        const cnpj = String(x.nfeEmitCnpj ?? '').trim()
-        if (cnpj) {
-          const sup = await getDocs(query(suppliersCol(db, orgId), where('cnpj', '==', cnpj), limit(1)))
-          if (!sup.empty) {
-            const s = sup.docs[0]!.data() as Record<string, unknown>
-            brandNfe = String(s.tradeName ?? s.name ?? '').trim()
+          const metaCnpj = String(meta.data()?.emitCnpj ?? '').trim()
+          const metaSupplierId = String(meta.data()?.supplierId ?? '').trim()
+          if ((!chave || metaChave === chave) && metaCnpj) {
+            resolved = await findSupplierByTaxId(db, orgId, metaCnpj)
+            if (!resolvedSupplierId && metaSupplierId) resolvedSupplierId = metaSupplierId
           }
         }
       }
-      if (brandNfe) setBrand(brandNfe)
+
+      if (resolved) {
+        setSupplierId(resolved.id)
+        setLinkedSupplierLabel(supplierBrandLabel(resolved))
+        setBrand(supplierBrandLabel(resolved))
+      } else if (resolvedSupplierId) {
+        setSupplierId(resolvedSupplierId)
+      } else {
+        let brandNfe = String(x.nfeEmitFantasia ?? x.nfeBrand ?? x.brand ?? '').trim()
+        if (!brandNfe && chave) {
+          const meta = await getDoc(lastNfeMetaDoc(db, orgId))
+          if (meta.exists()) {
+            const metaChave = String(meta.data()?.chave ?? '').trim()
+            const fantasia = String(meta.data()?.emitFantasia ?? '').trim()
+            if (fantasia && (!chave || metaChave === chave)) brandNfe = fantasia
+          }
+        }
+        if (brandNfe) setBrand(brandNfe)
+      }
       const sug = uc > 0 ? Math.round(uc * 1.8 * 100) / 100 : 0
       setSuggestedPrice(String(sug))
       setSalePrice(String(sug))
@@ -123,6 +151,14 @@ export default function ProductFormPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     if (!orgId) return
+    if (draftId && supplierBlocked) {
+      window.alert('Cadastre primeiro a marca/fornecedor da nota em Entradas → NF-e (passo 1).')
+      return
+    }
+    if (draftId && !supplierId) {
+      window.alert('Este produto da NF-e precisa de uma marca cadastrada. Volte à importação e complete o fornecedor.')
+      return
+    }
     setBusy(true)
     try {
       const c = num(cost)
@@ -137,6 +173,7 @@ export default function ProductFormPage() {
           name: name.trim(),
           size: size.trim(),
           brand: brand.trim(),
+          supplierId: supplierId ?? deleteField(),
           cost: c,
           freight: fr,
           ipi: ip,
@@ -196,11 +233,15 @@ export default function ProductFormPage() {
         title={isNew ? (draftId ? 'Completar cadastro (NF-e)' : 'Novo produto') : 'Editar produto'}
         subtitle={
           draftId
-            ? 'Marca, custo, frete e IPI vêm da NF-e (nome fantasia do emitente).'
-            : 'Marca será ligada a um cadastro próprio numa próxima versão; por agora escreva o nome da marca.'
+            ? supplierBlocked
+              ? 'Complete primeiro o cadastro da marca/fornecedor na página de importação NF-e.'
+              : linkedSupplierLabel
+                ? `Vinculado à marca: ${linkedSupplierLabel}`
+                : 'Marca, custo, frete e IPI vêm da NF-e.'
+            : undefined
         }
         actions={
-          <Link to="/app/cadastros/produtos">
+          <Link to={draftId ? '/app/entradas/nfe' : '/app/cadastros/produtos'}>
             <Button variant="secondary" type="button">
               Voltar
             </Button>
@@ -221,9 +262,23 @@ export default function ProductFormPage() {
             </Field>
           </div>
           <div className="sm:col-span-2">
-            <Field label="Marca">
-              <Input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Ex.: Dicorpo" />
+            <Field label="Marca (fornecedor cadastrado)">
+              <Input
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                placeholder="Cadastre a marca na NF-e antes de completar o produto"
+                readOnly={!!supplierId}
+                className={supplierId ? 'bg-zinc-100 dark:bg-zinc-900' : undefined}
+              />
             </Field>
+            {supplierBlocked ? (
+              <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">
+                <Link className="font-medium underline" to="/app/entradas/nfe">
+                  Volte à importação NF-e
+                </Link>{' '}
+                e complete o fornecedor (passo 1) antes deste produto.
+              </p>
+            ) : null}
           </div>
           <Field label="Custo">
             <Input value={cost} onChange={(e) => setCost(e.target.value)} />
@@ -244,7 +299,7 @@ export default function ProductFormPage() {
             <Input type="number" value={stock} onChange={(e) => setStock(e.target.value)} />
           </Field>
           <div className="sm:col-span-2">
-            <Button type="submit" disabled={busy || deleteBusy}>
+            <Button type="submit" disabled={busy || deleteBusy || supplierBlocked}>
               Guardar
             </Button>
           </div>

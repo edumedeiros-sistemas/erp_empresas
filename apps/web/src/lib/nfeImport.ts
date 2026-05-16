@@ -8,6 +8,7 @@ import {
   supplierDraftsCol,
   suppliersCol,
 } from '@/lib/firestorePaths'
+import { findSupplierByTaxId, supplierBrandLabel } from '@/lib/nfeSupplierLink'
 import { emitTradeNameFromNfe, guessSizeFromDescription, type NFeItemLine, type NFeParsed } from '@/lib/nfeXml'
 import {
   addDoc,
@@ -125,15 +126,19 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
   let nfeBrand = emitTradeName
   if (!nfeBrand) nfeBrand = await productBrandFromNfe(orgId, parsed)
   const nfeEmitCnpj = supplierTaxIdFromParsed(parsed)
+  const registeredSupplier = nfeEmitCnpj ? await findSupplierByTaxId(db, orgId, nfeEmitCnpj) : null
+  const linkedSupplierId = registeredSupplier?.id ?? null
+  const linkedBrand = registeredSupplier ? supplierBrandLabel(registeredSupplier) : nfeBrand
 
-  if (parsed.chave && emitTradeName) {
+  if (parsed.chave && (emitTradeName || nfeEmitCnpj)) {
     try {
       await setDoc(
         lastNfeMetaDoc(db, orgId),
         {
           chave: parsed.chave,
-          emitFantasia: emitTradeName,
+          emitFantasia: linkedBrand || emitTradeName || null,
           emitCnpj: nfeEmitCnpj || null,
+          supplierId: linkedSupplierId,
           nNF: parsed.nNF ?? null,
           updatedAt: serverTimestamp(),
         },
@@ -263,7 +268,9 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     if (hasFreight || (hasIpi && ip > 0)) {
       patch.totalCost = Math.round((base.cost + nf + ip) * 100) / 100
     }
-    if (nfeBrand) patch.brand = nfeBrand
+    if (linkedSupplierId) patch.supplierId = linkedSupplierId
+    if (linkedBrand) patch.brand = linkedBrand
+    else if (nfeBrand) patch.brand = nfeBrand
     batch.update(pref, patch)
     ops++
     await commitIfFull()
@@ -292,12 +299,14 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     }
     if (freightUnitDraft > 0) draftPayload.nfeFreightPerUnit = freightUnitDraft
     if (ipiUnitDraft > 0) draftPayload.nfeIpiPerUnit = Math.round(ipiUnitDraft * 100) / 100
-    if (emitTradeName) {
-      draftPayload.nfeEmitFantasia = emitTradeName
-      draftPayload.nfeBrand = emitTradeName
-      draftPayload.brand = emitTradeName
-    }
     if (nfeEmitCnpj) draftPayload.nfeEmitCnpj = nfeEmitCnpj
+    if (linkedSupplierId) draftPayload.supplierId = linkedSupplierId
+    const draftBrand = linkedBrand || emitTradeName
+    if (draftBrand) {
+      draftPayload.nfeEmitFantasia = draftBrand
+      draftPayload.nfeBrand = draftBrand
+      draftPayload.brand = draftBrand
+    }
     batch.set(draftRef, draftPayload)
     ops++
     draftsCreated++
@@ -323,7 +332,9 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
               nNF: parsed.nNF ?? '',
               serie: parsed.serie ?? '',
               orderRef: (parsed.xPed ?? '').trim(),
-              supplierName: supplierDisplayNameFromParsed(parsed) || (parsed.emitenteNome ?? '').trim(),
+              supplierId: linkedSupplierId,
+              supplierName:
+                linkedBrand || supplierDisplayNameFromParsed(parsed) || (parsed.emitenteNome ?? '').trim(),
               amount: Math.round(dup.vDup * 100) / 100,
               dupNumber: dup.nDup,
               dueDate: dueDateFromDup(dup.dVenc),
@@ -338,7 +349,9 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
             nNF: parsed.nNF ?? '',
             serie: parsed.serie ?? '',
             orderRef: (parsed.xPed ?? '').trim(),
-            supplierName: supplierDisplayNameFromParsed(parsed) || (parsed.emitenteNome ?? '').trim(),
+            supplierId: linkedSupplierId,
+            supplierName:
+              linkedBrand || supplierDisplayNameFromParsed(parsed) || (parsed.emitenteNome ?? '').trim(),
             amount: Math.round(totalAmount * 100) / 100,
             dhEmi: movementDate,
             status: 'aberto',

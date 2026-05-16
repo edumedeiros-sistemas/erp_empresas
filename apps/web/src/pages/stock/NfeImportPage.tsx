@@ -20,9 +20,16 @@ export default function NfeImportPage() {
   const [lastResult, setLastResult] = useState<string | null>(null)
   const [pendingDrafts, setPendingDrafts] = useState<ProductDraft[]>([])
   const [pendingSupplierDrafts, setPendingSupplierDrafts] = useState<SupplierDraft[]>([])
-  const [lastNfeMeta, setLastNfeMeta] = useState<{ chave: string; emitFantasia: string } | null>(null)
+  const [lastNfeMeta, setLastNfeMeta] = useState<{
+    chave: string
+    emitFantasia: string
+    supplierId: string
+  } | null>(null)
+
+  const mustCompleteSupplierFirst = pendingSupplierDrafts.length > 0
 
   function brandForDraft(d: ProductDraft): string {
+    if (d.supplierId) return `${String(d.nfeEmitFantasia ?? d.brand ?? '').trim() || '—'} ✓ vinculado`
     const direct = String(d.nfeEmitFantasia ?? d.nfeBrand ?? d.brand ?? '').trim()
     if (direct) return direct
     const fantasia = lastNfeMeta?.emitFantasia?.trim() ?? ''
@@ -30,6 +37,13 @@ export default function NfeImportPage() {
     const chave = String(d.nfeChave ?? '').trim()
     if (!chave || chave === lastNfeMeta?.chave) return fantasia
     return ''
+  }
+
+  function canCompleteProduct(d: ProductDraft): boolean {
+    if (mustCompleteSupplierFirst) return false
+    if (d.supplierId) return true
+    if (!d.nfeEmitCnpj) return true
+    return false
   }
 
   useEffect(() => {
@@ -43,6 +57,7 @@ export default function NfeImportPage() {
       setLastNfeMeta({
         chave: String(x.chave ?? '').trim(),
         emitFantasia: String(x.emitFantasia ?? '').trim(),
+        supplierId: String(x.supplierId ?? '').trim(),
       })
     })
   }, [orgId])
@@ -73,6 +88,8 @@ export default function NfeImportPage() {
           nfeBrand: x.nfeBrand as string | null | undefined,
           nfeEmitFantasia: x.nfeEmitFantasia as string | null | undefined,
           brand: x.brand as string | null | undefined,
+          nfeEmitCnpj: x.nfeEmitCnpj as string | null | undefined,
+          supplierId: x.supplierId as string | null | undefined,
           createdAt: x.createdAt as ProductDraft['createdAt'],
         })
       }
@@ -168,8 +185,10 @@ export default function NfeImportPage() {
         setMessage('Importação concluída. Produtos associados; fornecedor já existia ou não há dados de emitente para pré-cadastro.')
       } else if (res.draftsCreated === 0) {
         setMessage('Importação concluída. Todos os códigos bateram com produtos cadastrados. Complete o fornecedor em Marcas se aparecer abaixo.')
+      } else if (res.supplierDraftCreated) {
+        setMessage('Importação concluída. Passo 1: complete a marca/fornecedor abaixo. Passo 2: complete os produtos (já vinculados à marca).')
       } else {
-        setMessage('Importação concluída. Veja abaixo produtos e/ou fornecedor a completar.')
+        setMessage('Importação concluída. Marca já cadastrada — pode completar os produtos abaixo.')
       }
       if (res.errors.length > 0) {
         setMessage((prev) => [prev, ...res.errors].filter(Boolean).join(' '))
@@ -287,12 +306,12 @@ export default function NfeImportPage() {
             <strong className="text-zinc-800 dark:text-zinc-200">IPI</strong> do produto (valor por unidade = vIPI ÷ quantidade). Nos pré-cadastros, o IPI sugerido também é guardado.
           </li>
           <li>
-            A <strong className="text-zinc-800 dark:text-zinc-200">marca</strong> do produto é preenchida com o{' '}
-            <strong className="text-zinc-800 dark:text-zinc-200">nome fantasia do emitente</strong> (emit/xFant), o mesmo valor do campo nome fantasia no cadastro de fornecedor.
+            <strong className="text-zinc-800 dark:text-zinc-200">Passo 1:</strong> cadastre a{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">marca/fornecedor</strong> (emitente da nota) antes dos produtos. Produtos e contas a pagar ficam vinculados ao{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">supplierId</strong> para relatórios e filtros.
           </li>
           <li>
-            O <strong className="text-zinc-800 dark:text-zinc-200">emitente</strong> da nota (CNPJ, nome fantasia, razão social, IE) gera um{' '}
-            <strong className="text-zinc-800 dark:text-zinc-200">pré-cadastro de fornecedor</strong> em Marcas, se ainda não existir fornecedor com o mesmo CNPJ/CPF; complete telefone e demais dados à mão.
+            <strong className="text-zinc-800 dark:text-zinc-200">Passo 2:</strong> complete os pré-cadastros de produto — a marca já vem ligada ao fornecedor cadastrado.
           </li>
           <li>
             Se existir <strong className="text-zinc-800 dark:text-zinc-200">cobrança com duplicatas</strong> (grupo <strong className="text-zinc-800 dark:text-zinc-200">cobr/dup</strong> no XML), em <strong className="text-zinc-800 dark:text-zinc-200">Contas a pagar</strong> são criadas{' '}
@@ -316,81 +335,20 @@ export default function NfeImportPage() {
         {lastResult ? <p className="mt-2 text-sm font-medium text-emerald-800 dark:text-emerald-200">{lastResult}</p> : null}
       </Card>
 
-      <Card>
-        <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Produtos a completar cadastro</h2>
+      <Card className="mb-6 border-violet-200 dark:border-violet-900">
+        <div className="mb-2 inline-flex rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-semibold text-violet-800 dark:bg-violet-950 dark:text-violet-200">
+          Passo 1 — obrigatório
+        </div>
+        <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Marca / fornecedor a completar</h2>
         <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-          Após cada importação, os itens que não puderam associar a um produto existente aparecem aqui. Use &quot;Completar&quot; para abrir o formulário já preenchido com dados da nota.
-        </p>
-        {pendingDrafts.length === 0 ? (
-          <p className="text-sm text-zinc-500">Nenhum pré-cadastro pendente.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
-            <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
-                <tr>
-                  <th className="px-3 py-2">Código</th>
-                  <th className="px-3 py-2">Descrição (NF-e)</th>
-                  <th className="px-3 py-2">Tam.</th>
-                  <th className="px-3 py-2">Marca (xFant)</th>
-                  <th className="px-3 py-2 text-right">Qtd NF</th>
-                  <th className="px-3 py-2 text-right">Custo unit.</th>
-                  <th className="px-3 py-2">Nota</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {pendingDrafts.map((d) => {
-                  const marca = brandForDraft(d)
-                  return (
-                  <tr key={d.id} className="border-b border-zinc-100 dark:border-zinc-900">
-                    <td className="px-3 py-2 font-mono text-xs">{d.code}</td>
-                    <td className="max-w-[200px] truncate px-3 py-2" title={d.name}>
-                      {d.name}
-                    </td>
-                    <td className="px-3 py-2">{d.size}</td>
-                    <td
-                      className={`max-w-[160px] truncate px-3 py-2 text-xs ${
-                        marca
-                          ? 'font-medium text-emerald-800 dark:text-emerald-200'
-                          : 'text-amber-700 dark:text-amber-300'
-                      }`}
-                      title={marca || 'Marca não gravada no pré-cadastro — reimporte o XML após o deploy'}
-                    >
-                      {marca || '— não gravado'}
-                    </td>
-                    <td className="px-3 py-2 text-right">{d.lastQty}</td>
-                    <td className="px-3 py-2 text-right">
-                      {d.lastUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-zinc-500">
-                      {d.nfeNNF ? `NF ${d.nfeNNF}` : ''} {d.matchNote ? `· ${d.matchNote}` : ''}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      <Link to={`/app/cadastros/produtos/novo?draft=${d.id}`}>
-                        <Button type="button" className="mr-2 text-xs py-1">
-                          Completar
-                        </Button>
-                      </Link>
-                      <Button type="button" variant="ghost" className="text-xs py-1 text-red-600" onClick={() => void dismissDraft(d.id)}>
-                        Descartar
-                      </Button>
-                    </td>
-                  </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      <Card className="mb-6">
-        <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Fornecedor (emitente) a completar</h2>
-        <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-          Dados fiscais vindos da NF-e; use &quot;Completar&quot; para abrir o cadastro em Marcas e preencher telefone e o que faltar.
+          Cadastre primeiro o emitente da NF-e. Ao guardar, os produtos e as contas a pagar desta nota ficam vinculados a esta marca.
         </p>
         {pendingSupplierDrafts.length === 0 ? (
-          <p className="text-sm text-zinc-500">Nenhum pré-cadastro de fornecedor pendente.</p>
+          <p className="text-sm text-emerald-800 dark:text-emerald-200">
+            {pendingDrafts.length > 0
+              ? 'Marca já cadastrada — pode completar os produtos (passo 2).'
+              : 'Nenhum pré-cadastro de fornecedor pendente.'}
+          </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
             <table className="min-w-full text-left text-sm">
@@ -422,7 +380,7 @@ export default function NfeImportPage() {
                     <td className="whitespace-nowrap px-3 py-2">
                       <Link to={`/app/cadastros/marcas/novo?draft=${d.id}`}>
                         <Button type="button" className="mr-2 text-xs py-1">
-                          Completar
+                          Completar marca
                         </Button>
                       </Link>
                       <Button
@@ -436,6 +394,93 @@ export default function NfeImportPage() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card className={mustCompleteSupplierFirst ? 'opacity-75' : ''}>
+        <div className="mb-2 inline-flex rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+          Passo 2
+        </div>
+        <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Produtos a completar cadastro</h2>
+        <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
+          {mustCompleteSupplierFirst
+            ? 'Complete a marca (passo 1) para desbloquear o cadastro dos produtos já vinculados ao fornecedor.'
+            : 'Itens da nota sem produto cadastrado. A marca vem do fornecedor já registado.'}
+        </p>
+        {pendingDrafts.length === 0 ? (
+          <p className="text-sm text-zinc-500">Nenhum pré-cadastro pendente.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
+                <tr>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Descrição (NF-e)</th>
+                  <th className="px-3 py-2">Tam.</th>
+                  <th className="px-3 py-2">Marca vinculada</th>
+                  <th className="px-3 py-2 text-right">Qtd NF</th>
+                  <th className="px-3 py-2 text-right">Custo unit.</th>
+                  <th className="px-3 py-2">Nota</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingDrafts.map((d) => {
+                  const marca = brandForDraft(d)
+                  const canComplete = canCompleteProduct(d)
+                  return (
+                    <tr key={d.id} className="border-b border-zinc-100 dark:border-zinc-900">
+                      <td className="px-3 py-2 font-mono text-xs">{d.code}</td>
+                      <td className="max-w-[200px] truncate px-3 py-2" title={d.name}>
+                        {d.name}
+                      </td>
+                      <td className="px-3 py-2">{d.size}</td>
+                      <td
+                        className={`max-w-[160px] truncate px-3 py-2 text-xs ${
+                          d.supplierId
+                            ? 'font-medium text-emerald-800 dark:text-emerald-200'
+                            : marca
+                              ? 'text-zinc-700 dark:text-zinc-300'
+                              : 'text-amber-700 dark:text-amber-300'
+                        }`}
+                        title={marca || 'Aguardando cadastro da marca (passo 1)'}
+                      >
+                        {d.supplierId ? marca : marca || '— aguarda marca'}
+                      </td>
+                      <td className="px-3 py-2 text-right">{d.lastQty}</td>
+                      <td className="px-3 py-2 text-right">
+                        {d.lastUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-zinc-500">
+                        {d.nfeNNF ? `NF ${d.nfeNNF}` : ''} {d.matchNote ? `· ${d.matchNote}` : ''}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2">
+                        {canComplete ? (
+                          <Link to={`/app/cadastros/produtos/novo?draft=${d.id}`}>
+                            <Button type="button" className="mr-2 text-xs py-1">
+                              Completar
+                            </Button>
+                          </Link>
+                        ) : (
+                          <Button type="button" className="mr-2 text-xs py-1" disabled title="Complete a marca primeiro">
+                            Completar
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="text-xs py-1 text-red-600"
+                          onClick={() => void dismissDraft(d.id)}
+                        >
+                          Descartar
+                        </Button>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

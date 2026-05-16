@@ -101,8 +101,10 @@ export interface Product {
   code: string
   name: string
   size: string
-  /** Marca; futuro: ligar a cadastro de marcas. */
+  /** Nome da marca (fantasia) para listas. */
   brand: string
+  /** Fornecedor/marca cadastrado (organizations/{orgId}/suppliers). */
+  supplierId?: string | null
   cost: number
   freight: number
   ipi: number
@@ -186,6 +188,10 @@ export interface ProductDraft {
   nfeEmitFantasia?: string | null
   /** Campo marca gravado no pré-cadastro (cópia de nfeEmitFantasia na importação). */
   brand?: string | null
+  /** CNPJ/CPF do emitente (só dígitos). */
+  nfeEmitCnpj?: string | null
+  /** Fornecedor já cadastrado na importação ou após completar marca. */
+  supplierId?: string | null
   createdAt?: Timestamp
 }
 
@@ -214,6 +220,8 @@ export interface AccountPayable {
   /** Pedido (xPed no XML). */
   orderRef: string
   supplierName: string
+  /** Fornecedor/marca cadastrado. */
+  supplierId?: string | null
   amount: number
   dhEmi: Timestamp | null
   /** Número da duplicata (parcela na NF-e). */

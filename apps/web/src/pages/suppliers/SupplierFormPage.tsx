@@ -1,5 +1,6 @@
 import { Button, Card, Field, Input, PageTitle, TextArea } from '@/components/Ui'
 import { db } from '@/firebase'
+import { linkSupplierAfterNfeRegistration } from '@/lib/nfeSupplierLink'
 import { supplierDraftsCol, suppliersCol } from '@/lib/firestorePaths'
 import { digitsOnlyTaxId, formatBrazilTaxIdForDisplay } from '@/lib/taxIdBr'
 import { useOrg } from '@/contexts/OrgContext'
@@ -23,6 +24,7 @@ export default function SupplierFormPage() {
   const [busy, setBusy] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [draftNfeChave, setDraftNfeChave] = useState<string | null>(null)
 
   useEffect(() => {
     if (!orgId || isNew || !id) return
@@ -59,6 +61,7 @@ export default function SupplierFormPage() {
       setTradeName(String(x.tradeName ?? ''))
       setLegalName(String(x.legalName ?? ''))
       setStateRegistration(String(x.stateRegistration ?? ''))
+      setDraftNfeChave(String(x.nfeChave ?? '').trim() || null)
     })()
     return () => {
       cancelled = true
@@ -91,10 +94,20 @@ export default function SupplierFormPage() {
       payload.legalName = ln ? ln : deleteField()
       payload.stateRegistration = sr ? sr : deleteField()
       await setDoc(ref, payload, { merge: true })
+      let chaveLink = draftNfeChave
+      if (orgId && draftId) {
+        const draftSnap = await getDoc(doc(supplierDraftsCol(db, orgId), draftId))
+        if (draftSnap.exists()) {
+          chaveLink = String(draftSnap.data()?.nfeChave ?? '').trim() || chaveLink
+        }
+      }
+      if (orgId && taxDigits && chaveLink) {
+        await linkSupplierAfterNfeRegistration(orgId, ref.id, taxDigits, chaveLink)
+      }
       if (orgId && draftId) {
         await deleteDoc(doc(supplierDraftsCol(db, orgId), draftId))
       }
-      navigate('/app/cadastros/marcas')
+      navigate(draftId ? '/app/entradas/nfe' : '/app/cadastros/marcas')
     } finally {
       setBusy(false)
     }
@@ -122,13 +135,13 @@ export default function SupplierFormPage() {
         title={isNew ? (draftId ? 'Completar fornecedor (NF-e)' : 'Novo fornecedor') : 'Editar fornecedor'}
         subtitle={
           draftId
-            ? 'Dados preenchidos a partir do emitente da nota; complete telefone e o que faltar.'
+            ? 'Passo 1 da NF-e: cadastre a marca/fornecedor. Depois volte à importação para completar os produtos já vinculados.'
             : isNew
               ? 'CNPJ, nome fantasia, razão social e IE conforme o cadastro fiscal.'
               : undefined
         }
         actions={
-          <Link to="/app/cadastros/marcas">
+          <Link to={draftId ? '/app/entradas/nfe' : '/app/cadastros/marcas'}>
             <Button variant="secondary" type="button">
               Voltar
             </Button>
