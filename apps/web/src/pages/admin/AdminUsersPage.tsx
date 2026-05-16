@@ -106,7 +106,8 @@ export default function AdminUsersPage() {
               <tr>
                 <th className="px-3 py-2">Email</th>
                 <th className="px-3 py-2">UID</th>
-                <th className="px-3 py-2">Orgs (doc users)</th>
+                <th className="px-3 py-2">Orgs</th>
+                <th className="px-3 py-2 text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -115,6 +116,14 @@ export default function AdminUsersPage() {
                   <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{r.email}</td>
                   <td className="px-3 py-2 font-mono text-xs text-zinc-500">{r.uid}</td>
                   <td className="px-3 py-2">{r.orgCount}</td>
+                  <td className="px-3 py-2 text-right">
+                    <Link
+                      to={`/app/admin/utilizador/${r.uid}`}
+                      className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700"
+                    >
+                      Editar
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>

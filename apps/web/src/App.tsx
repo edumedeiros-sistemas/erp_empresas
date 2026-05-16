@@ -25,6 +25,7 @@ import NfeImportPage from '@/pages/stock/NfeImportPage'
 import StockEntriesPage from '@/pages/stock/StockEntriesPage'
 import AdminOrgDetailPage from '@/pages/admin/AdminOrgDetailPage'
 import AdminOrgsPage from '@/pages/admin/AdminOrgsPage'
+import AdminUserDetailPage from '@/pages/admin/AdminUserDetailPage'
 import AdminUsersPage from '@/pages/admin/AdminUsersPage'
 import { RequireAuth, RequireOrg, RequireSuperAdmin } from '@/routes/Guards'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
@@ -61,6 +62,7 @@ export default function App() {
                   <Route index element={<Navigate to="empresas" replace />} />
                   <Route path="empresas" element={<AdminOrgsPage />} />
                   <Route path="utilizadores" element={<AdminUsersPage />} />
+                  <Route path="utilizador/:uid" element={<AdminUserDetailPage />} />
                   <Route path="empresa/:orgId" element={<AdminOrgDetailPage />} />
                 </Route>
               </Route>
