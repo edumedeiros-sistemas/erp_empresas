@@ -86,6 +86,14 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     const usnap = await getDoc(uref)
     const legacy: string[] = usnap.exists() ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean) : []
     const ids = [...new Set([...fromMembers, ...legacy])]
+    const missingInProfile = fromMembers.filter((id) => !legacy.includes(id))
+    if (missingInProfile.length > 0) {
+      try {
+        await updateDoc(uref, { orgIds: arrayUnion(...missingInProfile) })
+      } catch {
+        /* perfil users pode falhar; a lista já vem de members. */
+      }
+    }
     setOrgIds(ids)
     setLoadingList(false)
   }, [user])

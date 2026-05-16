@@ -350,12 +350,15 @@ export default function OrgSelectPage() {
         return
       }
       const role = inviteRole === 'owner' ? 'staff' : inviteRole
-      await setDoc(memRef, {
+      const b = writeBatch(db)
+      b.set(memRef, {
         role,
         email: memberEmail,
         memberUid: targetUid,
         joinedAt: serverTimestamp(),
       })
+      b.set(userDoc(db, targetUid), { orgIds: arrayUnion(orgId) }, { merge: true })
+      await b.commit()
       setInviteEmail('')
       setSelectedMemberUid(null)
       setInviteRole('staff')
@@ -385,6 +388,7 @@ export default function OrgSelectPage() {
         resolvedByUid: user.uid,
         resolvedAt: serverTimestamp(),
       })
+      b.set(userDoc(db, row.requesterUid), { orgIds: arrayUnion(orgId) }, { merge: true })
       await b.commit()
     } catch (err) {
       setInviteError(err instanceof Error ? err.message : 'Não foi possível aprovar.')

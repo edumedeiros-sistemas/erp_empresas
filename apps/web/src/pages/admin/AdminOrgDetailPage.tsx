@@ -251,6 +251,17 @@ export default function AdminOrgDetailPage() {
     }
   }
 
+  async function syncMemberLink(memberId: string) {
+    setErr(null)
+    setMsg(null)
+    try {
+      await setDoc(userDoc(db, memberId), { orgIds: arrayUnion(oid) }, { merge: true })
+      setMsg('Vínculo users.orgIds atualizado para este utilizador.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erro ao sincronizar.')
+    }
+  }
+
   async function removeMember(memberId: string) {
     setErr(null)
     setMsg(null)
@@ -411,6 +422,14 @@ export default function AdminOrgDetailPage() {
                   onClick={() => void saveMemberRole(m.id)}
                 >
                   Guardar função
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="text-xs py-1"
+                  onClick={() => void syncMemberLink(m.id)}
+                >
+                  Sincronizar vínculo
                 </Button>
                 <Button type="button" variant="danger" className="text-xs py-1" onClick={() => void removeMember(m.id)}>
                   Remover

@@ -66,7 +66,10 @@ service cloud.firestore {
       allow update, delete: if isOwnerOrAdmin(orgId) || isSuperAdmin();
 
       match /members/{memberId} {
-        allow read: if isOrgMember(orgId) || (isSignedIn() && memberId == request.auth.uid) || isSuperAdmin();
+        allow read: if isOrgMember(orgId)
+          || (isSignedIn() && memberId == request.auth.uid)
+          || (isSignedIn() && resource.data.memberUid == request.auth.uid)
+          || isSuperAdmin();
         allow create: if isSignedIn()
           && request.resource.data.memberUid == memberId
           && (

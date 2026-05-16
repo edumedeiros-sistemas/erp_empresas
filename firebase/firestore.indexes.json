@@ -1,6 +1,11 @@
 {
   "indexes": [
     {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "memberUid", "order": "ASCENDING" }]
+    },
+    {
       "collectionGroup": "invites",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
