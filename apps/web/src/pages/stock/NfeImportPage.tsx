@@ -1,7 +1,7 @@
 import { Button, Card, Field, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { clearImportTestData } from '@/lib/clearImportTestData'
-import { productDraftsCol, supplierDraftsCol } from '@/lib/firestorePaths'
+import { lastNfeMetaDoc, productDraftsCol, supplierDraftsCol } from '@/lib/firestorePaths'
 import { importNFeXmlToOrg } from '@/lib/nfeImport'
 import { emitTradeNameFromNfe, parseNFeXml } from '@/lib/nfeXml'
 import { formatBrazilTaxIdForDisplay } from '@/lib/taxIdBr'
@@ -20,6 +20,32 @@ export default function NfeImportPage() {
   const [lastResult, setLastResult] = useState<string | null>(null)
   const [pendingDrafts, setPendingDrafts] = useState<ProductDraft[]>([])
   const [pendingSupplierDrafts, setPendingSupplierDrafts] = useState<SupplierDraft[]>([])
+  const [lastNfeMeta, setLastNfeMeta] = useState<{ chave: string; emitFantasia: string } | null>(null)
+
+  function brandForDraft(d: ProductDraft): string {
+    const direct = String(d.nfeEmitFantasia ?? d.nfeBrand ?? d.brand ?? '').trim()
+    if (direct) return direct
+    const fantasia = lastNfeMeta?.emitFantasia?.trim() ?? ''
+    if (!fantasia) return ''
+    const chave = String(d.nfeChave ?? '').trim()
+    if (!chave || chave === lastNfeMeta?.chave) return fantasia
+    return ''
+  }
+
+  useEffect(() => {
+    if (!orgId) return
+    return onSnapshot(lastNfeMetaDoc(db, orgId), (snap) => {
+      if (!snap.exists()) {
+        setLastNfeMeta(null)
+        return
+      }
+      const x = snap.data() as Record<string, unknown>
+      setLastNfeMeta({
+        chave: String(x.chave ?? '').trim(),
+        emitFantasia: String(x.emitFantasia ?? '').trim(),
+      })
+    })
+  }, [orgId])
 
   useEffect(() => {
     if (!orgId) return
@@ -44,6 +70,9 @@ export default function NfeImportPage() {
           nfeItem: x.nfeItem as number | undefined,
           needsCompletion: true,
           matchNote: String(x.matchNote ?? ''),
+          nfeBrand: x.nfeBrand as string | null | undefined,
+          nfeEmitFantasia: x.nfeEmitFantasia as string | null | undefined,
+          brand: x.brand as string | null | undefined,
           createdAt: x.createdAt as ProductDraft['createdAt'],
         })
       }
@@ -302,6 +331,7 @@ export default function NfeImportPage() {
                   <th className="px-3 py-2">Código</th>
                   <th className="px-3 py-2">Descrição (NF-e)</th>
                   <th className="px-3 py-2">Tam.</th>
+                  <th className="px-3 py-2">Marca (xFant)</th>
                   <th className="px-3 py-2 text-right">Qtd NF</th>
                   <th className="px-3 py-2 text-right">Custo unit.</th>
                   <th className="px-3 py-2">Nota</th>
@@ -309,13 +339,25 @@ export default function NfeImportPage() {
                 </tr>
               </thead>
               <tbody>
-                {pendingDrafts.map((d) => (
+                {pendingDrafts.map((d) => {
+                  const marca = brandForDraft(d)
+                  return (
                   <tr key={d.id} className="border-b border-zinc-100 dark:border-zinc-900">
                     <td className="px-3 py-2 font-mono text-xs">{d.code}</td>
                     <td className="max-w-[200px] truncate px-3 py-2" title={d.name}>
                       {d.name}
                     </td>
                     <td className="px-3 py-2">{d.size}</td>
+                    <td
+                      className={`max-w-[160px] truncate px-3 py-2 text-xs ${
+                        marca
+                          ? 'font-medium text-emerald-800 dark:text-emerald-200'
+                          : 'text-amber-700 dark:text-amber-300'
+                      }`}
+                      title={marca || 'Marca não gravada no pré-cadastro — reimporte o XML após o deploy'}
+                    >
+                      {marca || '— não gravado'}
+                    </td>
                     <td className="px-3 py-2 text-right">{d.lastQty}</td>
                     <td className="px-3 py-2 text-right">
                       {d.lastUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
@@ -334,7 +376,8 @@ export default function NfeImportPage() {
                       </Button>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

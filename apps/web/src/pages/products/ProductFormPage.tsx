@@ -82,10 +82,12 @@ export default function ProductFormPage() {
       setIpi(ipiNfe > 0 ? String(ipiNfe) : '0')
       let brandNfe = String(x.nfeEmitFantasia ?? x.nfeBrand ?? x.brand ?? '').trim()
       const chave = String(x.nfeChave ?? '').trim()
-      if (!brandNfe && chave) {
+      if (!brandNfe) {
         const meta = await getDoc(lastNfeMetaDoc(db, orgId))
-        if (meta.exists() && String(meta.data()?.chave ?? '') === chave) {
-          brandNfe = String(meta.data()?.emitFantasia ?? '').trim()
+        if (meta.exists()) {
+          const metaChave = String(meta.data()?.chave ?? '').trim()
+          const fantasia = String(meta.data()?.emitFantasia ?? '').trim()
+          if (fantasia && (!chave || metaChave === chave)) brandNfe = fantasia
         }
       }
       if (!brandNfe && chave) {

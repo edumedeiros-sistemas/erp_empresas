@@ -184,6 +184,8 @@ export interface ProductDraft {
   nfeBrand?: string | null
   /** Nome fantasia do emitente (emit/xFant) — mesmo valor que tradeName do fornecedor. */
   nfeEmitFantasia?: string | null
+  /** Campo marca gravado no pré-cadastro (cópia de nfeEmitFantasia na importação). */
+  brand?: string | null
   createdAt?: Timestamp
 }
 
