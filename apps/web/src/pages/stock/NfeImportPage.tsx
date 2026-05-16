@@ -3,7 +3,7 @@ import { db } from '@/firebase'
 import { clearImportTestData } from '@/lib/clearImportTestData'
 import { productDraftsCol, supplierDraftsCol } from '@/lib/firestorePaths'
 import { importNFeXmlToOrg } from '@/lib/nfeImport'
-import { parseNFeXml } from '@/lib/nfeXml'
+import { emitTradeNameFromNfe, parseNFeXml } from '@/lib/nfeXml'
 import { formatBrazilTaxIdForDisplay } from '@/lib/taxIdBr'
 import { useOrg } from '@/contexts/OrgContext'
 import type { ProductDraft, SupplierDraft } from '@/types'
@@ -111,10 +111,28 @@ export default function NfeImportPage() {
     try {
       const text = await file.text()
       const parsed = parseNFeXml(text)
+      const emitTrade = emitTradeNameFromNfe(parsed)
+      const itemsWithIpi = parsed.items.filter((i) => i.vIPI > 0)
+      const totalIpi = itemsWithIpi.reduce((s, i) => s + i.vIPI, 0)
       const res = await importNFeXmlToOrg(orgId, parsed)
+      const ipiSummary =
+        itemsWithIpi.length > 0
+          ? ` · IPI lido em ${itemsWithIpi.length} item(ns) (total R$ ${totalIpi.toFixed(2)} na nota)` +
+            (res.productsIpiUpdated > 0
+              ? ` · IPI gravado em ${res.productsIpiUpdated} produto(s) cadastrado(s)`
+              : res.draftsCreated > 0
+                ? ' · IPI sugerido nos pré-cadastros (complete em Produtos)'
+                : '')
+          : ''
+      const brandSummary = emitTrade
+        ? ` · Marca/fornecedor (xFant): ${emitTrade}`
+        : ' · Aviso: nome fantasia do emitente não encontrado no XML'
       setLastResult(
         `Nota ${res.nNF ?? '?'} série ${res.serie ?? '?'} · ${res.stockLines} linha(s) deram entrada em stock · ` +
-          `${res.draftsCreated} pré-cadastro(s) de produto · ` +
+          `${res.draftsCreated} pré-cadastro(s) de produto` +
+          brandSummary +
+          ipiSummary +
+          ' · ' +
           (res.supplierDraftCreated ? '1 pré-cadastro de fornecedor criado.' : 'Fornecedor já cadastrado ou pré-cadastro já existente para esta nota.'),
       )
       if (res.draftsCreated === 0 && !res.supplierDraftCreated) {
@@ -233,12 +251,15 @@ export default function NfeImportPage() {
             Se não existir: cria <strong className="text-zinc-800 dark:text-zinc-200">pré-cadastro</strong> com quantidade e custo da nota para concluir em Produtos.
           </li>
           <li>
-            Se a nota tiver <strong className="text-zinc-800 dark:text-zinc-200">frete (ICMSTot/vFrete)</strong>, o valor é dividido em partes iguais por{' '}
-            <strong className="text-zinc-800 dark:text-zinc-200">linha de item</strong>; em cada produto encontrado, o campo <strong className="text-zinc-800 dark:text-zinc-200">Frete</strong> passa a ser o frete por unidade dessa linha (e o custo total é recalculado). Nos pré-cadastros, o frete sugerido também é guardado.
+            O <strong className="text-zinc-800 dark:text-zinc-200">frete</strong> usa o valor por linha em <strong className="text-zinc-800 dark:text-zinc-200">prod/vFrete</strong> quando existir; caso contrário, divide o total <strong className="text-zinc-800 dark:text-zinc-200">ICMSTot/vFrete</strong> entre as linhas. O campo <strong className="text-zinc-800 dark:text-zinc-200">Frete</strong> do produto fica em R$/unidade (e o custo total é recalculado).
           </li>
           <li>
             O <strong className="text-zinc-800 dark:text-zinc-200">IPI de cada item</strong> (det/imposto/IPI) é lido por linha e gravado no campo{' '}
             <strong className="text-zinc-800 dark:text-zinc-200">IPI</strong> do produto (valor por unidade = vIPI ÷ quantidade). Nos pré-cadastros, o IPI sugerido também é guardado.
+          </li>
+          <li>
+            A <strong className="text-zinc-800 dark:text-zinc-200">marca</strong> do produto é preenchida com o{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">nome fantasia do emitente</strong> (emit/xFant), o mesmo valor do campo nome fantasia no cadastro de fornecedor.
           </li>
           <li>
             O <strong className="text-zinc-800 dark:text-zinc-200">emitente</strong> da nota (CNPJ, nome fantasia, razão social, IE) gera um{' '}

@@ -10,6 +10,8 @@ export interface NFeItemLine {
   vProd: number
   /** Valor total de IPI da linha (det/imposto/IPI/.../vIPI). */
   vIPI: number
+  /** Frete da linha (prod/vFrete), quando informado no item. */
+  vFrete: number
 }
 
 export interface NFeDuplicata {
@@ -49,6 +51,27 @@ export interface NFeParsed {
   items: NFeItemLine[]
 }
 
+/** Nome fantasia do emitente (igual tradeName do fornecedor). */
+export function emitTradeNameFromNfe(parsed: NFeParsed): string {
+  return (parsed.emitFantasia ?? parsed.emitRazaoSocial ?? parsed.emitenteNome ?? '').trim()
+}
+
+/** Fallback quando o DOM não expõe emit/xFant (XML minificado). */
+function emitFieldsFromRawXml(xmlString: string): { xNome: string; xFant: string; cnpj: string; cpf: string } {
+  const emitM = xmlString.match(/<emit\b[^>]*>([\s\S]*?)<\/emit>/i)
+  const block = emitM?.[1] ?? ''
+  const tag = (name: string) => {
+    const m = block.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i'))
+    return m ? m[1]!.replace(/<[^>]*>/g, '').trim() : ''
+  }
+  return {
+    xNome: tag('xNome'),
+    xFant: tag('xFant'),
+    cnpj: tag('CNPJ').replace(/\D/g, ''),
+    cpf: tag('CPF').replace(/\D/g, ''),
+  }
+}
+
 function textChild(parent: Element, local: string): string {
   for (const ch of Array.from(parent.children)) {
     if (ch.localName === local) return ch.textContent?.trim() ?? ''
@@ -75,29 +98,48 @@ function parseXmlDecimal(s: string): number {
   return Number.isFinite(n) ? n : 0
 }
 
-/** IPI total da linha (det/imposto/IPI). */
+function firstChildEl(parent: Element, local: string): Element | null {
+  for (const ch of Array.from(parent.children)) {
+    if (ch.localName === local) return ch
+  }
+  for (const el of [...parent.getElementsByTagName('*')]) {
+    if (el.localName === local && el.parentElement === parent) return el
+  }
+  return null
+}
+
+/** vIPI dentro de imposto/IPI deste `det` (evita confundir com outros grupos do XML). */
 function ipiFromDet(det: Element): number {
-  const imposto = [...det.children].find((c) => c.localName === 'imposto')
+  const imposto = firstChildEl(det, 'imposto')
   if (!imposto) return 0
 
-  const ipiRoot = [...imposto.children].find((c) => c.localName === 'IPI')
-  if (!ipiRoot) return 0
-
-  for (const block of [...ipiRoot.children]) {
-    if (block.localName !== 'IPITrib' && block.localName !== 'IPINT') continue
-    const vIPI = parseXmlDecimal(textChild(block, 'vIPI'))
-    if (vIPI > 0) return vIPI
-    const vBC = parseXmlDecimal(textChild(block, 'vBC'))
-    const pIPI = parseXmlDecimal(textChild(block, 'pIPI'))
-    if (vBC > 0 && pIPI > 0) {
-      return Math.round(((vBC * pIPI) / 100) * 100) / 100
+  const ipiRoot = firstChildEl(imposto, 'IPI')
+  if (ipiRoot) {
+    for (const block of [...ipiRoot.getElementsByTagName('*')]) {
+      if (block.localName !== 'IPITrib' && block.localName !== 'IPINT') continue
+      if (!ipiRoot.contains(block)) continue
+      const vIPI = parseXmlDecimal(textChild(block, 'vIPI'))
+      if (vIPI > 0) return vIPI
+      const vBC = parseXmlDecimal(textChild(block, 'vBC'))
+      const pIPI = parseXmlDecimal(textChild(block, 'pIPI'))
+      if (vBC > 0 && pIPI > 0) {
+        return Math.round(((vBC * pIPI) / 100) * 100) / 100
+      }
     }
   }
 
-  for (const el of [...ipiRoot.getElementsByTagName('*')]) {
-    if (el.localName === 'vIPI') {
-      const v = parseXmlDecimal(el.textContent ?? '')
-      if (v > 0) return v
+  for (const el of [...det.getElementsByTagName('*')]) {
+    if (el.localName !== 'vIPI') continue
+    let p: Element | null = el.parentElement
+    let underIpi = false
+    while (p && p !== det) {
+      if (p.localName === 'IPI' || p.localName === 'IPITrib' || p.localName === 'IPINT') underIpi = true
+      if (p.localName === 'imposto' && underIpi) {
+        const v = parseXmlDecimal(el.textContent ?? '')
+        if (v > 0) return v
+        break
+      }
+      p = p.parentElement
     }
   }
   return 0
@@ -211,15 +253,23 @@ export function parseNFeXml(xmlString: string): NFeParsed {
   }
 
   if (infNfe) {
-    const emit = [...infNfe.children].find((c) => c.localName === 'emit')
+    const emit = firstChildEl(infNfe, 'emit')
     if (emit) {
       emitRazaoSocial = textChild(emit, 'xNome')
       emitFantasia = textChild(emit, 'xFant')
+      if (!emitFantasia.trim()) {
+        for (const el of [...emit.getElementsByTagName('*')]) {
+          if (el.localName === 'xFant') {
+            emitFantasia = el.textContent?.trim() ?? ''
+            break
+          }
+        }
+      }
       emitIE = textChild(emit, 'IE')
       emitCnpjDigits = textChild(emit, 'CNPJ').replace(/\D/g, '')
       emitCpfDigits = textChild(emit, 'CPF').replace(/\D/g, '')
     }
-    const compra = [...infNfe.children].find((c) => c.localName === 'compra')
+    const compra = firstChildEl(infNfe, 'compra')
     if (compra) xPedDoc = textChild(compra, 'xPed')
     const totalEl = [...infNfe.children].find((c) => c.localName === 'total')
     if (totalEl) {
@@ -261,7 +311,7 @@ export function parseNFeXml(xmlString: string): NFeParsed {
 
   for (const det of dets) {
     const nItem = parseInt(det.getAttribute('nItem') ?? '0', 10) || items.length + 1
-    const prod = [...det.children].find((c) => c.localName === 'prod')
+    const prod = firstChildEl(det, 'prod')
     if (!prod) continue
     const cProd = textChild(prod, 'cProd')
     const xProd = textChild(prod, 'xProd')
@@ -276,6 +326,7 @@ export function parseNFeXml(xmlString: string): NFeParsed {
     if (!cProd && !xProd) continue
     if (!xPedDoc.trim() && xPedItem.trim()) xPedDoc = xPedItem.trim()
     const vIPI = ipiFromDet(det)
+    const vFreteLine = parseXmlDecimal(textChild(prod, 'vFrete'))
     items.push({
       nItem,
       cProd: cProd.trim(),
@@ -285,6 +336,7 @@ export function parseNFeXml(xmlString: string): NFeParsed {
       vUnCom,
       vProd,
       vIPI,
+      vFrete: vFreteLine > 0 ? vFreteLine : 0,
     })
   }
 
@@ -297,6 +349,14 @@ export function parseNFeXml(xmlString: string): NFeParsed {
   if (!xPedDoc.trim() && infNfe) {
     const fromCpl = extractPedidoFromInfCpl(infNfe)
     if (fromCpl) xPedDoc = fromCpl
+  }
+
+  if (!emitRazaoSocial.trim() || !emitFantasia.trim()) {
+    const raw = emitFieldsFromRawXml(xmlString)
+    if (!emitRazaoSocial.trim() && raw.xNome) emitRazaoSocial = raw.xNome
+    if (!emitFantasia.trim() && raw.xFant) emitFantasia = raw.xFant
+    if (!emitCnpjDigits && raw.cnpj.length === 14) emitCnpjDigits = raw.cnpj
+    if (!emitCpfDigits && raw.cpf.length === 11) emitCpfDigits = raw.cpf
   }
 
   return {

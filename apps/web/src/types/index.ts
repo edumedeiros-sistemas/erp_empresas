@@ -180,6 +180,10 @@ export interface ProductDraft {
   nfeFreightPerUnit?: number | null
   /** IPI por unidade da linha (NF-e), para pré-preencher ao completar cadastro. */
   nfeIpiPerUnit?: number | null
+  /** Marca sugerida (nome fantasia do emitente), igual ao fornecedor da nota. */
+  nfeBrand?: string | null
+  /** Nome fantasia do emitente (emit/xFant) — mesmo valor que tradeName do fornecedor. */
+  nfeEmitFantasia?: string | null
   createdAt?: Timestamp
 }
 

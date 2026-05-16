@@ -1,9 +1,15 @@
 import { Button, Card, Field, Input, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { deleteProductForOrg } from '@/lib/deleteProductForOrg'
-import { productDraftsCol, productsCol } from '@/lib/firestorePaths'
+import {
+  lastNfeMetaDoc,
+  productDraftsCol,
+  productsCol,
+  supplierDraftsCol,
+  suppliersCol,
+} from '@/lib/firestorePaths'
 import { useOrg } from '@/contexts/OrgContext'
-import { deleteDoc, deleteField, doc, getDoc, setDoc } from 'firebase/firestore'
+import { deleteDoc, deleteField, doc, getDoc, getDocs, limit, query, setDoc, where } from 'firebase/firestore'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -74,6 +80,34 @@ export default function ProductFormPage() {
       setFreight(fNfe > 0 ? String(fNfe) : '0')
       const ipiNfe = Number(x.nfeIpiPerUnit ?? 0)
       setIpi(ipiNfe > 0 ? String(ipiNfe) : '0')
+      let brandNfe = String(x.nfeEmitFantasia ?? x.nfeBrand ?? x.brand ?? '').trim()
+      const chave = String(x.nfeChave ?? '').trim()
+      if (!brandNfe && chave) {
+        const meta = await getDoc(lastNfeMetaDoc(db, orgId))
+        if (meta.exists() && String(meta.data()?.chave ?? '') === chave) {
+          brandNfe = String(meta.data()?.emitFantasia ?? '').trim()
+        }
+      }
+      if (!brandNfe && chave) {
+        const sd = await getDocs(
+          query(supplierDraftsCol(db, orgId), where('nfeChave', '==', chave), limit(1)),
+        )
+        if (!sd.empty) {
+          const s = sd.docs[0]!.data() as Record<string, unknown>
+          brandNfe = String(s.tradeName ?? '').trim()
+        }
+      }
+      if (!brandNfe) {
+        const cnpj = String(x.nfeEmitCnpj ?? '').trim()
+        if (cnpj) {
+          const sup = await getDocs(query(suppliersCol(db, orgId), where('cnpj', '==', cnpj), limit(1)))
+          if (!sup.empty) {
+            const s = sup.docs[0]!.data() as Record<string, unknown>
+            brandNfe = String(s.tradeName ?? s.name ?? '').trim()
+          }
+        }
+      }
+      if (brandNfe) setBrand(brandNfe)
       const sug = uc > 0 ? Math.round(uc * 1.8 * 100) / 100 : 0
       setSuggestedPrice(String(sug))
       setSalePrice(String(sug))
@@ -117,6 +151,9 @@ export default function ProductFormPage() {
           fee12x: deleteField(),
           price12x: deleteField(),
           nfeFreightPerUnit: deleteField(),
+          nfeIpiPerUnit: deleteField(),
+          nfeBrand: deleteField(),
+          nfeEmitFantasia: deleteField(),
         },
         { merge: true },
       )
@@ -155,7 +192,11 @@ export default function ProductFormPage() {
     <div>
       <PageTitle
         title={isNew ? (draftId ? 'Completar cadastro (NF-e)' : 'Novo produto') : 'Editar produto'}
-        subtitle="Marca será ligada a um cadastro próprio numa próxima versão; por agora escreva o nome da marca."
+        subtitle={
+          draftId
+            ? 'Marca, custo, frete e IPI vêm da NF-e (nome fantasia do emitente).'
+            : 'Marca será ligada a um cadastro próprio numa próxima versão; por agora escreva o nome da marca.'
+        }
         actions={
           <Link to="/app/cadastros/produtos">
             <Button variant="secondary" type="button">

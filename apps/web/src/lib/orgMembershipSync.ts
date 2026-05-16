@@ -1,6 +1,7 @@
 import { db } from '@/firebase'
 import {
   membersCol,
+  orgDirectoryCol,
   orgDoc,
   organizationsCol,
   userDoc,
@@ -9,16 +10,13 @@ import {
 import { normalizeEmail } from '@/lib/emailNormalize'
 import type { MemberRole } from '@/types'
 import {
-  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
-  query,
   serverTimestamp,
   setDoc,
   updateDoc,
-  where,
   writeBatch,
 } from 'firebase/firestore'
 
@@ -152,22 +150,29 @@ export async function deleteUserFirestoreData(uid: string): Promise<void> {
   await deleteDoc(userPublicLookupDoc(db, uid)).catch(() => {})
 }
 
-/** IDs de org onde o utilizador tem documento member (para refreshOrgs do próprio user). */
+/**
+ * IDs de org do utilizador (refresh / F5).
+ * Não usa collection group em `members` — regras Firestore só permitem list a admin/super-admin.
+ */
 export async function listMembershipOrgIdsForUser(uid: string): Promise<string[]> {
-  try {
-    const snap = await getDocs(
-      query(collectionGroup(db, 'members'), where('memberUid', '==', uid)),
-    )
-    return [
-      ...new Set(
-        snap.docs
-          .map((d) => d.ref.parent.parent?.id)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ]
-  } catch {
-    return []
+  const usnap = await getDoc(userDoc(db, uid))
+  const profileIds: string[] = usnap.exists()
+    ? ((usnap.data().orgIds as string[]) ?? []).filter(Boolean)
+    : []
+
+  let candidates = [...new Set(profileIds)]
+
+  if (candidates.length === 0) {
+    try {
+      const dirSnap = await getDocs(orgDirectoryCol(db))
+      candidates = dirSnap.docs.map((d) => d.id)
+    } catch {
+      /* sem orgDirectory legível */
+    }
   }
+
+  const verified = await verifyMembershipOrgIds(uid, candidates)
+  return filterExistingOrgIds(verified)
 }
 
 /** Confirma orgIds com documento member existente (remove fantasmas do perfil). */

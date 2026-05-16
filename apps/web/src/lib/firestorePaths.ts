@@ -65,6 +65,11 @@ export function dashboardDoc(db: Firestore, orgId: string) {
   return doc(db, 'organizations', orgId, 'meta', 'dashboard')
 }
 
+/** Última NF-e importada (emitente para pré-cadastros antigos). */
+export function lastNfeMetaDoc(db: Firestore, orgId: string) {
+  return doc(db, 'organizations', orgId, 'meta', 'lastNfe')
+}
+
 export function userDoc(db: Firestore, uid: string) {
   return doc(db, 'users', uid)
 }

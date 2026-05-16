@@ -1,6 +1,14 @@
 import { db } from '@/firebase'
-import { payablesCol, productDraftsCol, productsCol, stockMovementsCol, supplierDraftsCol, suppliersCol } from '@/lib/firestorePaths'
-import { guessSizeFromDescription, type NFeItemLine, type NFeParsed } from '@/lib/nfeXml'
+import {
+  lastNfeMetaDoc,
+  payablesCol,
+  productDraftsCol,
+  productsCol,
+  stockMovementsCol,
+  supplierDraftsCol,
+  suppliersCol,
+} from '@/lib/firestorePaths'
+import { emitTradeNameFromNfe, guessSizeFromDescription, type NFeItemLine, type NFeParsed } from '@/lib/nfeXml'
 import {
   addDoc,
   collection,
@@ -11,11 +19,28 @@ import {
   serverTimestamp,
   Timestamp,
   where,
+  setDoc,
   writeBatch,
 } from 'firebase/firestore'
 import type { Product } from '@/types'
 
-type ProductRow = Pick<Product, 'id' | 'code' | 'name' | 'size' | 'cost' | 'ipi' | 'freight'>
+type ProductRow = Pick<Product, 'id' | 'code' | 'name' | 'size' | 'cost' | 'ipi' | 'freight' | 'brand'>
+
+/** Marca do produto = nome fantasia do emitente (igual ao cadastro de fornecedor / tradeName). */
+async function productBrandFromNfe(orgId: string, parsed: NFeParsed): Promise<string> {
+  const fromXml = (parsed.emitFantasia ?? '').trim()
+  if (fromXml) return fromXml
+  const taxId = supplierTaxIdFromParsed(parsed)
+  if (taxId) {
+    const supSnap = await getDocs(query(suppliersCol(db, orgId), where('cnpj', '==', taxId)))
+    if (!supSnap.empty) {
+      const d = supSnap.docs[0]!.data() as Record<string, unknown>
+      const trade = String(d.tradeName ?? d.name ?? '').trim()
+      if (trade) return trade
+    }
+  }
+  return ''
+}
 
 function findProductForLine(
   products: ProductRow[],
@@ -44,6 +69,8 @@ export interface NFeImportResult {
   stockLines: number
   draftsCreated: number
   pendingDraftIds: string[]
+  /** Produtos existentes com campo IPI atualizado a partir da NF-e. */
+  productsIpiUpdated: number
   /** Foi criado pré-cadastro de fornecedor (emitente) para completar em Marcas. */
   supplierDraftCreated: boolean
   errors: string[]
@@ -76,6 +103,7 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
   const pendingDraftIds: string[] = []
   let stockLines = 0
   let draftsCreated = 0
+  let productsIpiUpdated = 0
   let supplierDraftCreated = false
 
   const snap = await getDocs(collection(db, 'organizations', orgId, 'products'))
@@ -89,8 +117,32 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
       cost: Number(x.cost ?? 0),
       ipi: Number(x.ipi ?? 0),
       freight: Number(x.freight ?? 0),
+      brand: String(x.brand ?? ''),
     }
   })
+
+  const emitTradeName = emitTradeNameFromNfe(parsed)
+  let nfeBrand = emitTradeName
+  if (!nfeBrand) nfeBrand = await productBrandFromNfe(orgId, parsed)
+  const nfeEmitCnpj = supplierTaxIdFromParsed(parsed)
+
+  if (parsed.chave && emitTradeName) {
+    try {
+      await setDoc(
+        lastNfeMetaDoc(db, orgId),
+        {
+          chave: parsed.chave,
+          emitFantasia: emitTradeName,
+          emitCnpj: nfeEmitCnpj || null,
+          nNF: parsed.nNF ?? null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      )
+    } catch {
+      /* opcional */
+    }
+  }
 
   const movementDate = parsed.dhEmi ? Timestamp.fromDate(new Date(parsed.dhEmi)) : Timestamp.now()
 
@@ -118,12 +170,17 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
   const vFreteTotal = parsed.vFrete ?? 0
   const freightPerLine = importLineCount > 0 && vFreteTotal > 0 ? vFreteTotal / importLineCount : 0
 
-  /** Por produto: soma dos R$ de frete rateados (uma fatia por linha da NF) e quantidade total da NF nesse produto → R$/unidade. */
+  function freightForLine(line: NFeItemLine): number {
+    if (line.vFrete > 0) return line.vFrete
+    return freightPerLine
+  }
+
+  /** Por produto: soma do frete da linha (prod/vFrete ou rateio do total) → R$/unidade. */
   const freightAgg = new Map<string, { sum: number; qty: number }>()
   for (const { line, product } of matched) {
     const id = product.id
     const cur = freightAgg.get(id) ?? { sum: 0, qty: 0 }
-    cur.sum += freightPerLine
+    cur.sum += freightForLine(line)
     cur.qty += line.qCom
     freightAgg.set(id, cur)
   }
@@ -188,8 +245,8 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
   for (const [productId, qtyAdd] of stockByProduct) {
     const pref = doc(productsCol(db, orgId), productId)
     const p = products.find((x) => x.id === productId)
-    const base = p ?? { cost: 0, ipi: 0, freight: 0 }
-    const hasFreight = freightPerLine > 0
+    const base = p ?? { cost: 0, ipi: 0, freight: 0, brand: '' }
+    const hasFreight = freightPerUnitByProduct.has(productId)
     const hasIpi = ipiPerUnitByProduct.has(productId)
     const nf = hasFreight
       ? Math.round((freightPerUnitByProduct.get(productId) ?? base.freight) * 100) / 100
@@ -199,10 +256,14 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
       : base.ipi
     const patch: Record<string, unknown> = { stock: increment(qtyAdd) }
     if (hasFreight) patch.freight = nf
-    if (hasIpi && ip > 0) patch.ipi = ip
+    if (hasIpi && ip > 0) {
+      patch.ipi = ip
+      productsIpiUpdated++
+    }
     if (hasFreight || (hasIpi && ip > 0)) {
       patch.totalCost = Math.round((base.cost + nf + ip) * 100) / 100
     }
+    if (nfeBrand) patch.brand = nfeBrand
     batch.update(pref, patch)
     ops++
     await commitIfFull()
@@ -210,7 +271,8 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
 
   for (const { line, reason, guessedSize } of draftLines) {
     const draftRef = doc(productDraftsCol(db, orgId))
-    const freightUnitDraft = freightPerLine > 0 && line.qCom > 0 ? freightPerLine / line.qCom : 0
+    const lineFrete = freightForLine(line)
+    const freightUnitDraft = lineFrete > 0 && line.qCom > 0 ? lineFrete / line.qCom : 0
     const ipiUnitDraft = line.vIPI > 0 && line.qCom > 0 ? line.vIPI / line.qCom : 0
     const draftPayload: Record<string, unknown> = {
       code: line.cProd.trim(),
@@ -230,6 +292,12 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     }
     if (freightUnitDraft > 0) draftPayload.nfeFreightPerUnit = freightUnitDraft
     if (ipiUnitDraft > 0) draftPayload.nfeIpiPerUnit = Math.round(ipiUnitDraft * 100) / 100
+    if (emitTradeName) {
+      draftPayload.nfeEmitFantasia = emitTradeName
+      draftPayload.nfeBrand = emitTradeName
+      draftPayload.brand = emitTradeName
+    }
+    if (nfeEmitCnpj) draftPayload.nfeEmitCnpj = nfeEmitCnpj
     batch.set(draftRef, draftPayload)
     ops++
     draftsCreated++
@@ -334,6 +402,7 @@ export async function importNFeXmlToOrg(orgId: string, parsed: NFeParsed): Promi
     stockLines,
     draftsCreated,
     pendingDraftIds,
+    productsIpiUpdated,
     supplierDraftCreated,
     errors,
   }

@@ -14,7 +14,17 @@ import {
   userDoc,
 } from '@/lib/firestorePaths'
 import type { Organization } from '@/types'
-import { arrayUnion, collection, doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
+import { readStoredActiveOrgId, writeStoredActiveOrgId } from '@/lib/activeOrgStorage'
+import {
+  arrayUnion,
+  collection,
+  deleteField,
+  doc,
+  getDoc,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+} from 'firebase/firestore'
 import {
   createContext,
   useCallback,
@@ -34,29 +44,23 @@ interface OrgValue {
   refreshOrgs: () => Promise<void>
   createOrganization: (name: string) => Promise<string>
   loadingList: boolean
+  /** A validar empresa guardada no browser após F5 (antes de redirecionar a /orgs). */
+  restoringOrg: boolean
 }
 
 const OrgContext = createContext<OrgValue | null>(null)
 
-const STORAGE_KEY = 'aura_casa_active_org'
-
 export function OrgProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
-  const [orgId, setOrgIdState] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEY)
-    } catch {
-      return null
-    }
-  })
+  const { user, loading: authLoading } = useAuth()
+  const [orgId, setOrgIdState] = useState<string | null>(() => readStoredActiveOrgId())
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [orgIds, setOrgIds] = useState<string[]>([])
   const [loadingList, setLoadingList] = useState(true)
+  const [restoringOrg, setRestoringOrg] = useState(() => !!readStoredActiveOrgId())
 
   const refreshOrgs = useCallback(async () => {
     if (!user) {
       setOrgIds([])
-      setLoadingList(false)
       return
     }
     setLoadingList(true)
@@ -88,37 +92,111 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, [user])
 
   useEffect(() => {
+    if (authLoading) {
+      setLoadingList(true)
+      return
+    }
+    if (!user) {
+      setOrgIds([])
+      setLoadingList(false)
+      return
+    }
     void refreshOrgs()
-  }, [refreshOrgs])
+  }, [refreshOrgs, authLoading, user])
 
-  const setOrgId = useCallback((id: string | null) => {
-    setOrgIdState(id)
-    try {
-      if (id) localStorage.setItem(STORAGE_KEY, id)
-      else localStorage.removeItem(STORAGE_KEY)
-    } catch {
-      /* ignore */
-    }
-  }, [])
+  const setOrgId = useCallback(
+    (id: string | null) => {
+      setOrgIdState(id)
+      writeStoredActiveOrgId(id)
+      if (user?.uid) {
+        void updateDoc(userDoc(db, user.uid), {
+          activeOrgId: id ? id : deleteField(),
+        }).catch(() => {
+          /* perfil opcional */
+        })
+      }
+    },
+    [user],
+  )
 
+  /** Restaura empresa ativa do browser ou do perfil (users.activeOrgId) após auth + lista. */
   useEffect(() => {
-    if (!loadingList && orgId && !orgIds.includes(orgId)) {
-      setOrgId(null)
-    }
-  }, [loadingList, orgId, orgIds, setOrgId])
+    if (authLoading || loadingList || !user) return
+    if (orgId) return
 
-  useEffect(() => {
-    if (!orgId || loadingList) return
+    const stored = readStoredActiveOrgId()
+    if (stored && orgIds.includes(stored)) {
+      setOrgIdState(stored)
+      setRestoringOrg(false)
+      return
+    }
+
     let cancelled = false
+    setRestoringOrg(true)
     void (async () => {
-      const snap = await getDoc(orgDoc(db, orgId))
-      if (cancelled) return
-      if (!snap.exists()) setOrgId(null)
+      try {
+        const usnap = await getDoc(userDoc(db, user.uid))
+        if (cancelled) return
+        const fromProfile = String((usnap.data()?.activeOrgId as string) ?? '').trim()
+        if (fromProfile && orgIds.includes(fromProfile)) {
+          setOrgIdState(fromProfile)
+          writeStoredActiveOrgId(fromProfile)
+          setRestoringOrg(false)
+        } else {
+          setRestoringOrg(false)
+        }
+      } catch {
+        if (!cancelled) setRestoringOrg(false)
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [orgId, loadingList, setOrgId])
+  }, [authLoading, loadingList, user, orgId, orgIds])
+
+  /** Após F5: confirma members/{uid} da empresa guardada antes de limpar ou mandar para /orgs. */
+  useEffect(() => {
+    if (authLoading || loadingList || !user) {
+      if (!orgId) setRestoringOrg(false)
+      return
+    }
+    if (!orgId) {
+      setRestoringOrg(false)
+      return
+    }
+    if (orgIds.includes(orgId)) {
+      setRestoringOrg(false)
+      return
+    }
+
+    let cancelled = false
+    setRestoringOrg(true)
+    void (async () => {
+      try {
+        const orgSnap = await getDoc(orgDoc(db, orgId))
+        if (cancelled) return
+        if (!orgSnap.exists()) {
+          setOrgId(null)
+          setRestoringOrg(false)
+          return
+        }
+        const memSnap = await getDoc(doc(membersCol(db, orgId), user.uid))
+        if (cancelled) return
+        if (memSnap.exists()) {
+          setOrgIds((prev) => (prev.includes(orgId) ? prev : [...prev, orgId]))
+          setRestoringOrg(false)
+          return
+        }
+        setOrgId(null)
+        setRestoringOrg(false)
+      } catch {
+        if (!cancelled) setRestoringOrg(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [authLoading, loadingList, orgId, orgIds, user, setOrgId])
 
   useEffect(() => {
     if (!orgId) {
@@ -191,6 +269,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       refreshOrgs,
       createOrganization,
       loadingList,
+      restoringOrg,
     }),
     [
       orgId,
@@ -200,6 +279,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       refreshOrgs,
       createOrganization,
       loadingList,
+      restoringOrg,
     ],
   )
 
