@@ -18,7 +18,7 @@ type ProductOpt = {
   suggestedPrice: number
 }
 
-type Line = { productId: string; quantity: string; unitPrice: string }
+type Line = { productId: string; productQuery: string; quantity: string; unitPrice: string }
 
 const PAYMENT_OPTIONS = ['PIX', 'Cartão de Débito', 'Cartão de Crédito', 'Crediário'] as const
 type PaymentOption = (typeof PAYMENT_OPTIONS)[number]
@@ -36,6 +36,14 @@ function normalize(s: string) {
   return s.trim().toLowerCase()
 }
 
+function productLabel(p: ProductOpt) {
+  const code = p.code.trim()
+  const name = p.name.trim()
+  const size = p.size.trim()
+  const head = [code, name].filter(Boolean).join(' · ')
+  return `${head}${size ? ` (${size})` : ''} — stock ${p.stock}`
+}
+
 export default function SaleNewPage() {
   const { orgId } = useOrg()
   const navigate = useNavigate()
@@ -49,7 +57,8 @@ export default function SaleNewPage() {
   const [paymentBase, setPaymentBase] = useState<PaymentOption>('PIX')
   const [installments, setInstallments] = useState('2')
   const [amountReceived, setAmountReceived] = useState('0')
-  const [lines, setLines] = useState<Line[]>([{ productId: '', quantity: '1', unitPrice: '0' }])
+  const [lines, setLines] = useState<Line[]>([{ productId: '', productQuery: '', quantity: '1', unitPrice: '0' }])
+  const [openProductLine, setOpenProductLine] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -98,11 +107,28 @@ export default function SaleNewPage() {
 
   useEffect(() => {
     function onDocMouseDown(e: MouseEvent) {
-      if (!clientBoxRef.current?.contains(e.target as Node)) setClientListOpen(false)
+      const t = e.target as Node
+      if (!clientBoxRef.current?.contains(t)) setClientListOpen(false)
+      const picker = (t as HTMLElement).closest?.('[data-product-picker]')
+      if (!picker) setOpenProductLine(null)
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [])
+
+  function filterProducts(query: string) {
+    const q = normalize(query)
+    if (!q) return products.slice(0, 15)
+    return products
+      .filter((p) => {
+        const code = normalize(p.code)
+        const name = normalize(p.name)
+        const size = normalize(p.size)
+        const blob = `${code} ${name} ${size}`
+        return code.includes(q) || name.includes(q) || size.includes(q) || blob.includes(q)
+      })
+      .slice(0, 15)
+  }
 
   const selectedClient = useMemo(() => clients.find((c) => c.id === clientId), [clients, clientId])
 
@@ -147,8 +173,30 @@ export default function SaleNewPage() {
     setLines((prev) => prev.map((row, j) => (j === i ? { ...row, ...patch } : row)))
   }
 
+  function pickProduct(i: number, p: ProductOpt) {
+    setLine(i, {
+      productId: p.id,
+      productQuery: productLabel(p),
+      unitPrice: String(p.salePrice > 0 ? p.salePrice : p.suggestedPrice),
+    })
+    setOpenProductLine(null)
+  }
+
+  function onProductInputChange(i: number, value: string) {
+    setLines((prev) =>
+      prev.map((row, j) => {
+        if (j !== i) return row
+        const selected = products.find((x) => x.id === row.productId)
+        const next = { ...row, productQuery: value }
+        if (selected && value !== productLabel(selected)) next.productId = ''
+        return next
+      }),
+    )
+    setOpenProductLine(i)
+  }
+
   function addLine() {
-    setLines((prev) => [...prev, { productId: '', quantity: '1', unitPrice: '0' }])
+    setLines((prev) => [...prev, { productId: '', productQuery: '', quantity: '1', unitPrice: '0' }])
   }
 
   function removeLine(i: number) {
@@ -174,7 +222,7 @@ export default function SaleNewPage() {
       }))
       .filter((l) => l.productId && l.quantity > 0 && l.unitPrice >= 0)
     if (!parsedLines.length) {
-      setError('Adicione pelo menos uma linha com produto e quantidade.')
+      setError('Adicione pelo menos uma linha com produto (escolha na lista ao escrever) e quantidade.')
       return
     }
     setBusy(true)
@@ -297,28 +345,56 @@ export default function SaleNewPage() {
                 const p = Number(String(line.unitPrice).replace(',', '.'))
                 const lineTot =
                   line.productId && Number.isFinite(q) && Number.isFinite(p) && q > 0 ? q * p : 0
+                const filteredProducts = filterProducts(line.productQuery)
                 return (
                   <div key={i} className="grid gap-2 rounded-lg border border-zinc-100 p-3 dark:border-zinc-800 sm:grid-cols-12">
-                    <div className="sm:col-span-5">
+                    <div className="sm:col-span-5" data-product-picker={i}>
                       <LabelMini>Produto</LabelMini>
-                      <Select
-                        value={line.productId}
-                        onChange={(e) => {
-                          const pid = e.target.value
-                          const pr = products.find((x) => x.id === pid)
-                          setLine(i, {
-                            productId: pid,
-                            unitPrice: pr ? String(pr.salePrice > 0 ? pr.salePrice : pr.suggestedPrice) : line.unitPrice,
-                          })
-                        }}
-                      >
-                        <option value="">—</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.code} {p.name} ({p.size}) stock {p.stock}
-                          </option>
-                        ))}
-                      </Select>
+                      <div className="relative">
+                        <Input
+                          autoComplete="off"
+                          value={line.productQuery}
+                          placeholder="Código ou nome do produto…"
+                          onChange={(e) => onProductInputChange(i, e.target.value)}
+                          onFocus={() => setOpenProductLine(i)}
+                        />
+                        {openProductLine === i && filteredProducts.length > 0 ? (
+                          <ul
+                            className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+                            role="listbox"
+                          >
+                            {filteredProducts.map((pr) => (
+                              <li key={pr.id}>
+                                <button
+                                  type="button"
+                                  className="flex w-full flex-col items-start px-3 py-2 text-left hover:bg-violet-50 dark:hover:bg-violet-950/40"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => pickProduct(i, pr)}
+                                >
+                                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                                    {[pr.code, pr.name].filter(Boolean).join(' · ') || '—'}
+                                  </span>
+                                  <span className="text-xs text-zinc-500">
+                                    {pr.size ? `Tam. ${pr.size}` : ''}
+                                    {pr.size ? ' · ' : ''}
+                                    Stock {pr.stock}
+                                    {' · '}
+                                    {(pr.salePrice > 0 ? pr.salePrice : pr.suggestedPrice).toLocaleString('pt-BR', {
+                                      style: 'currency',
+                                      currency: 'BRL',
+                                    })}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {openProductLine === i && line.productQuery.trim() && filteredProducts.length === 0 ? (
+                          <p className="absolute z-30 mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                            Nenhum produto encontrado.
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="sm:col-span-2">
                       <LabelMini>Qtd</LabelMini>
