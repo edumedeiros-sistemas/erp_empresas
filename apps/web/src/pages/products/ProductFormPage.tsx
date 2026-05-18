@@ -199,7 +199,7 @@ export default function ProductFormPage() {
       if (orgId && draftId) {
         await deleteDoc(doc(productDraftsCol(db, orgId), draftId))
       }
-      navigate('/app/cadastros/produtos')
+      navigate(draftId ? '/app/entradas/nfe' : '/app/cadastros/produtos')
     } finally {
       setBusy(false)
     }
