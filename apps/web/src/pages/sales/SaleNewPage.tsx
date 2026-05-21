@@ -1,11 +1,11 @@
 import { Button, Card, Field, Input, PageTitle, Select } from '@/components/Ui'
 import { db } from '@/firebase'
-import { clientsCol, productsCol } from '@/lib/firestorePaths'
-import { createSale } from '@/lib/saleOps'
+import { clientsCol, productsCol, saleItemsCol, salesCol } from '@/lib/firestorePaths'
+import { createSale, updateSale } from '@/lib/saleOps'
 import { useOrg } from '@/contexts/OrgContext'
-import { getDocs, orderBy, query } from 'firebase/firestore'
+import { doc, getDoc, getDocs, orderBy, query } from 'firebase/firestore'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 
 type ClientOpt = { id: string; name: string; phone: string }
 type ProductOpt = {
@@ -44,7 +44,23 @@ function productLabel(p: ProductOpt) {
   return `${head}${size ? ` (${size})` : ''} — stock ${p.stock}`
 }
 
+function parseStoredPaymentMethod(method: string): { base: PaymentOption; installments: string } {
+  for (const b of PAYMENT_OPTIONS) {
+    if (method === b) return { base: b, installments: '1' }
+    const prefix = `${b} · `
+    if (method.startsWith(prefix)) {
+      const m = method.match(/·\s*(\d+)\s*x\s*$/i)
+      return { base: b, installments: String(m ? Math.max(1, parseInt(m[1]!, 10)) : 1) }
+    }
+  }
+  return { base: 'PIX', installments: '1' }
+}
+
 export default function SaleNewPage() {
+  const { id: routeId } = useParams<{ id: string }>()
+  const isNew = !routeId || routeId === 'nova'
+  const editSaleId = isNew ? null : routeId
+
   const { orgId } = useOrg()
   const navigate = useNavigate()
   const [clients, setClients] = useState<ClientOpt[]>([])
@@ -61,16 +77,31 @@ export default function SaleNewPage() {
   const [openProductLine, setOpenProductLine] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [loadingSale, setLoadingSale] = useState(!isNew)
 
   useEffect(() => {
     if (!orgId) return
     let cancelled = false
     ;(async () => {
-      const [cSnap, pSnap] = await Promise.all([
+      if (!isNew) setLoadingSale(true)
+      const [cSnap, pSnap, saleSnap, itemsSnap] = await Promise.all([
         getDocs(query(clientsCol(db, orgId))),
         getDocs(query(productsCol(db, orgId), orderBy('code'))),
+        editSaleId ? getDoc(doc(salesCol(db, orgId), editSaleId)) : Promise.resolve(null),
+        editSaleId ? getDocs(saleItemsCol(db, orgId, editSaleId)) : Promise.resolve(null),
       ])
       if (cancelled) return
+
+      const returnQty = new Map<string, number>()
+      if (itemsSnap) {
+        for (const d of itemsSnap.docs) {
+          const x = d.data() as Record<string, unknown>
+          const pid = String(x.productId ?? '')
+          if (!pid) continue
+          returnQty.set(pid, (returnQty.get(pid) ?? 0) + Number(x.quantity ?? 0))
+        }
+      }
+
       setClients(
         cSnap.docs
           .map((d) => {
@@ -83,27 +114,69 @@ export default function SaleNewPage() {
           })
           .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt', { sensitivity: 'base' })),
       )
-      setProducts(
-        pSnap.docs.map((d) => {
-          const x = d.data() as Record<string, unknown>
-          const sug = Number(x.suggestedPrice ?? 0)
-          const sale = Number(x.salePrice ?? 0)
-          return {
-            id: d.id,
-            code: String(x.code ?? ''),
-            name: String(x.name ?? ''),
-            size: String(x.size ?? ''),
-            stock: Number(x.stock ?? 0),
-            salePrice: sale > 0 ? sale : sug,
-            suggestedPrice: sug,
-          }
-        }),
-      )
+      const productList = pSnap.docs.map((d) => {
+        const x = d.data() as Record<string, unknown>
+        const sug = Number(x.suggestedPrice ?? 0)
+        const sale = Number(x.salePrice ?? 0)
+        const baseStock = Number(x.stock ?? 0)
+        return {
+          id: d.id,
+          code: String(x.code ?? ''),
+          name: String(x.name ?? ''),
+          size: String(x.size ?? ''),
+          stock: baseStock + (returnQty.get(d.id) ?? 0),
+          salePrice: sale > 0 ? sale : sug,
+          suggestedPrice: sug,
+        }
+      })
+      setProducts(productList)
+
+      if (saleSnap?.exists()) {
+        const s = saleSnap.data() as Record<string, unknown>
+        const cid = String(s.clientId ?? '')
+        const cname = String(s.clientName ?? '')
+        const c = cSnap.docs.find((d) => d.id === cid)
+        const phone = c ? String((c.data() as Record<string, unknown>).phone ?? '') : ''
+        setClientId(cid)
+        setClientQuery(`${cname || '—'}${phone ? ` · ${phone}` : ''}`)
+        const saleDate = s.date as { toDate?: () => Date } | undefined
+        if (saleDate?.toDate) {
+          const d = saleDate.toDate()
+          setDateStr(
+            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+          )
+        }
+        const pm = parseStoredPaymentMethod(String(s.paymentMethod ?? ''))
+        setPaymentBase(pm.base)
+        setInstallments(pm.installments)
+        setAmountReceived(String(s.amountReceived ?? 0))
+        if (itemsSnap && itemsSnap.docs.length > 0) {
+          setLines(
+            itemsSnap.docs.map((d) => {
+              const x = d.data() as Record<string, unknown>
+              const pid = String(x.productId ?? '')
+              const pr = productList.find((p) => p.id === pid)
+              const line: Line = {
+                productId: pid,
+                productQuery: pr
+                  ? productLabel(pr)
+                  : `${String(x.productCode ?? '')} ${String(x.productName ?? '')}`.trim(),
+                quantity: String(x.quantity ?? 1),
+                unitPrice: String(x.unitPrice ?? 0),
+              }
+              return line
+            }),
+          )
+        }
+      } else if (!isNew) {
+        setError('Venda não encontrada.')
+      }
+      setLoadingSale(false)
     })()
     return () => {
       cancelled = true
     }
-  }, [orgId])
+  }, [orgId, editSaleId, isNew])
 
   useEffect(() => {
     function onDocMouseDown(e: MouseEvent) {
@@ -231,7 +304,7 @@ export default function SaleNewPage() {
 
     setBusy(true)
     try {
-      await createSale({
+      const payload = {
         orgId,
         clientId: client.id,
         clientName: client.name,
@@ -241,7 +314,12 @@ export default function SaleNewPage() {
         amountReceived: received,
         amountPending: pending,
         lines: parsedLines,
-      })
+      }
+      if (editSaleId) {
+        await updateSale({ ...payload, saleId: editSaleId })
+      } else {
+        await createSale(payload)
+      }
       navigate('/app/vendas')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao guardar venda.')
@@ -253,7 +331,8 @@ export default function SaleNewPage() {
   return (
     <div>
       <PageTitle
-        title="Nova venda"
+        title={isNew ? 'Nova venda' : 'Editar venda'}
+        subtitle={isNew ? undefined : 'Alterações atualizam stock, cliente, totais e contas a receber.'}
         actions={
           <Link to="/app/vendas">
             <Button variant="secondary" type="button">
@@ -263,6 +342,9 @@ export default function SaleNewPage() {
         }
       />
       <Card>
+        {loadingSale ? (
+          <p className="text-sm text-zinc-500">A carregar venda…</p>
+        ) : (
         <form onSubmit={onSubmit} className="max-w-2xl space-y-4">
           <Field label="Cliente">
             <div ref={clientBoxRef} className="relative">
@@ -425,10 +507,11 @@ export default function SaleNewPage() {
           </div>
 
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
-          <Button type="submit" disabled={busy}>
-            {busy ? 'A guardar…' : 'Guardar venda'}
+          <Button type="submit" disabled={busy || loadingSale}>
+            {busy ? 'A guardar…' : isNew ? 'Guardar venda' : 'Guardar alterações'}
           </Button>
         </form>
+        )}
       </Card>
     </div>
   )

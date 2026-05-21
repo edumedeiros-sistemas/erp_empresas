@@ -308,8 +308,14 @@ export default function ReceivablesPage() {
                       <td colSpan={8} className="bg-zinc-50/80 px-3 py-3 dark:bg-zinc-950/50">
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
                           <span>{head.paymentMethod || '—'}</span>
+                          <Link
+                            to={`/app/vendas/${saleId}`}
+                            className="mr-2 font-medium text-violet-700 hover:underline dark:text-violet-300"
+                          >
+                            Editar venda
+                          </Link>
                           <Link to="/app/vendas" className="font-medium text-violet-700 hover:underline dark:text-violet-300">
-                            Ver lista de vendas
+                            Lista de vendas
                           </Link>
                         </div>
                         <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">

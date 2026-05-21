@@ -78,6 +78,12 @@ export default function SaleListPage() {
               </div>
             </div>
             <div className="flex gap-2">
+              <Link
+                to={`/app/vendas/${s.id}`}
+                className="inline-flex items-center justify-center rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Editar
+              </Link>
               <Button variant="danger" type="button" disabled={deleting === s.id} onClick={() => void onDelete(s.id)}>
                 {deleting === s.id ? '…' : 'Apagar'}
               </Button>

@@ -84,6 +84,7 @@ export default function App() {
                   <Route path="produtos/:id" element={<LegacyProdutosIdRedirect />} />
                   <Route path="vendas" element={<SaleListPage />} />
                   <Route path="vendas/nova" element={<SaleNewPage />} />
+                  <Route path="vendas/:id" element={<SaleNewPage />} />
                   <Route path="entradas" element={<EntradasLayout />}>
                     <Route index element={<StockEntriesPage />} />
                     <Route path="nfe" element={<NfeImportPage />} />
