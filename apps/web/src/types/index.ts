@@ -235,17 +235,24 @@ export interface AccountPayable {
 
 export type ReceivableStatus = 'aberto' | 'recebido'
 
-/** Conta a receber gerada em venda a crediário. */
+/** Conta a receber gerada na venda (entrada + parcelas). */
 export interface AccountReceivable {
   id: string
   saleId: string
   clientId: string
   clientName: string
   amount: number
+  /** 0 = recebido na venda; 1..N = parcela */
+  installmentNumber: number
   installmentCount: number
+  installmentLabel?: string
   paymentMethod: string
   status: ReceivableStatus
   saleDate: Timestamp | null
+  dueDate?: Timestamp | null
+  saleSubtotal?: number
+  amountReceivedAtSale?: number
+  amountPendingAtSale?: number
   createdAt?: Timestamp
   receivedAt?: Timestamp | null
 }

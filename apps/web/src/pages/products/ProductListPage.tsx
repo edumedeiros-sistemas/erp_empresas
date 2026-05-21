@@ -1,11 +1,13 @@
-import { Button, PageTitle } from '@/components/Ui'
+import { ListFilterBar } from '@/components/ListFilterBar'
+import { Button, Input, Label, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { deleteProductForOrg } from '@/lib/deleteProductForOrg'
 import { productsCol } from '@/lib/firestorePaths'
+import { normalizeSearch, textMatches } from '@/lib/listSearch'
 import { useOrg } from '@/contexts/OrgContext'
 import type { Product } from '@/types'
 import { onSnapshot, orderBy, query } from 'firebase/firestore'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 function mapProductDoc(id: string, x: Record<string, unknown>): Product {
@@ -36,8 +38,70 @@ function mapProductDoc(id: string, x: Record<string, unknown>): Product {
 export default function ProductListPage() {
   const { orgId } = useOrg()
   const [rows, setRows] = useState<Product[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [codeQuery, setCodeQuery] = useState('')
+  const [brandQuery, setBrandQuery] = useState('')
+  const [brandFilter, setBrandFilter] = useState('')
+  const [brandOpen, setBrandOpen] = useState(false)
+  const brandBoxRef = useRef<HTMLDivElement>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
+
+  const uniqueBrands = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of rows) {
+      const b = p.brand.trim()
+      if (b) set.add(b)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'pt', { sensitivity: 'base' }))
+  }, [rows])
+
+  const brandSuggestions = useMemo(() => {
+    const q = normalizeSearch(brandQuery)
+    if (!q) return uniqueBrands.slice(0, 20)
+    return uniqueBrands.filter((b) => normalizeSearch(b).includes(q)).slice(0, 20)
+  }, [uniqueBrands, brandQuery])
+
+  const filtered = useMemo(() => {
+    return rows.filter((p) => {
+      if (brandFilter) {
+        if (normalizeSearch(p.brand) !== normalizeSearch(brandFilter)) return false
+      } else if (brandQuery.trim() && !textMatches(brandQuery, p.brand)) {
+        return false
+      }
+      if (codeQuery.trim() && !textMatches(codeQuery, p.code)) return false
+      if (searchQuery.trim() && !textMatches(searchQuery, p.name, p.size)) return false
+      return true
+    })
+  }, [rows, brandFilter, brandQuery, codeQuery, searchQuery])
+
+  useEffect(() => {
+    function onDocMouseDown(e: MouseEvent) {
+      if (!brandBoxRef.current?.contains(e.target as Node)) setBrandOpen(false)
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [])
+
+  function pickBrand(brand: string) {
+    setBrandFilter(brand)
+    setBrandQuery(brand)
+    setBrandOpen(false)
+  }
+
+  function onBrandInputChange(value: string) {
+    setBrandQuery(value)
+    if (brandFilter && normalizeSearch(value) !== normalizeSearch(brandFilter)) {
+      setBrandFilter('')
+    }
+    setBrandOpen(true)
+  }
+
+  function clearBrandFilter() {
+    setBrandFilter('')
+    setBrandQuery('')
+    setBrandOpen(false)
+  }
 
   async function handleDeleteRow(p: Product, e: React.MouseEvent) {
     e.preventDefault()
@@ -72,8 +136,6 @@ export default function ProductListPage() {
     })
   }, [orgId])
 
-  const sorted = useMemo(() => [...rows], [rows])
-
   return (
     <div>
       <PageTitle
@@ -90,6 +152,62 @@ export default function ProductListPage() {
           {listError}
         </p>
       ) : null}
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <ListFilterBar
+          label="Buscar produto"
+          placeholder="Nome ou tamanho…"
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
+        <ListFilterBar
+          label="Código"
+          placeholder="Digite o código…"
+          value={codeQuery}
+          onChange={setCodeQuery}
+        />
+        <div ref={brandBoxRef}>
+          <Label>Marca</Label>
+          <div className="relative flex gap-1">
+            <Input
+              autoComplete="off"
+              className="flex-1"
+              value={brandQuery}
+              placeholder="Digite a marca…"
+              onChange={(e) => onBrandInputChange(e.target.value)}
+              onFocus={() => setBrandOpen(true)}
+            />
+            {brandFilter ? (
+              <Button type="button" variant="secondary" className="shrink-0 px-2" onClick={clearBrandFilter}>
+                Limpar
+              </Button>
+            ) : null}
+          </div>
+          {brandOpen && brandSuggestions.length > 0 ? (
+            <ul
+              className="absolute z-30 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+              role="listbox"
+            >
+              {brandSuggestions.map((b) => (
+                <li key={b}>
+                  <button
+                    type="button"
+                    className="flex w-full px-3 py-2 text-left hover:bg-violet-50 dark:hover:bg-violet-950/40"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickBrand(b)}
+                  >
+                    {b}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {brandOpen && brandQuery.trim() && brandSuggestions.length === 0 ? (
+            <p className="absolute z-30 mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+              Nenhuma marca encontrada.
+            </p>
+          ) : null}
+        </div>
+      </div>
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
@@ -105,7 +223,7 @@ export default function ProductListPage() {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((p) => (
+            {filtered.map((p) => (
               <tr key={p.id} className="border-b border-zinc-100 dark:border-zinc-900">
                 <td className="px-3 py-2 font-mono text-xs">{p.code}</td>
                 <td className="px-3 py-2">
@@ -144,7 +262,11 @@ export default function ProductListPage() {
             ))}
           </tbody>
         </table>
-        {rows.length === 0 ? <p className="p-4 text-sm text-zinc-500">Sem produtos.</p> : null}
+        {rows.length === 0 ? (
+          <p className="p-4 text-sm text-zinc-500">Sem produtos.</p>
+        ) : filtered.length === 0 ? (
+          <p className="p-4 text-sm text-zinc-500">Nenhum produto encontrado para os filtros aplicados.</p>
+        ) : null}
       </div>
     </div>
   )

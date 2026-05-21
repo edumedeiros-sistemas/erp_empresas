@@ -1,18 +1,31 @@
+import { ListFilterBar } from '@/components/ListFilterBar'
 import { Button, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { suppliersCol } from '@/lib/firestorePaths'
+import { textMatches } from '@/lib/listSearch'
 import { formatBrazilTaxIdForDisplay } from '@/lib/taxIdBr'
 import { useOrg } from '@/contexts/OrgContext'
 import type { Supplier } from '@/types'
 import { deleteDoc, doc, onSnapshot, query } from 'firebase/firestore'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 export default function SupplierListPage() {
   const { orgId } = useOrg()
   const [rows, setRows] = useState<Supplier[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
+
+  const filtered = useMemo(() => {
+    if (!searchQuery.trim()) return rows
+    const qDigits = searchQuery.replace(/\D/g, '')
+    return rows.filter((s) => {
+      if (textMatches(searchQuery, s.name, s.tradeName, s.legalName, s.phone, s.notes)) return true
+      if (qDigits && s.cnpj?.replace(/\D/g, '').includes(qDigits)) return true
+      return false
+    })
+  }, [rows, searchQuery])
 
   async function handleDeleteRow(s: Supplier, e: React.MouseEvent) {
     e.preventDefault()
@@ -76,6 +89,14 @@ export default function SupplierListPage() {
           {listError}
         </p>
       ) : null}
+      <div className="mb-4 max-w-md">
+        <ListFilterBar
+          label="Buscar"
+          placeholder="Nome, fantasia, razão social, CNPJ ou telefone…"
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
+      </div>
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
@@ -88,7 +109,7 @@ export default function SupplierListPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((s) => (
+            {filtered.map((s) => (
               <tr key={s.id} className="border-b border-zinc-100 dark:border-zinc-900">
                 <td className="px-3 py-2">
                   <Link
@@ -135,6 +156,8 @@ export default function SupplierListPage() {
         </table>
         {rows.length === 0 ? (
           <p className="p-4 text-sm text-zinc-500">Sem fornecedores. Adicione o primeiro ou importe uma NF-e.</p>
+        ) : filtered.length === 0 ? (
+          <p className="p-4 text-sm text-zinc-500">Nenhum fornecedor encontrado para esta busca.</p>
         ) : null}
       </div>
     </div>

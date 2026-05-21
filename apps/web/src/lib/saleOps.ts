@@ -8,7 +8,7 @@ import {
   salesCol,
 } from '@/lib/firestorePaths'
 import type { SaleItem } from '@/types'
-import { doc, getDocs, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { doc, getDoc, getDocs, query, runTransaction, serverTimestamp, Timestamp, where } from 'firebase/firestore'
 
 export interface SaleLineInput {
   productId: string
@@ -38,6 +38,97 @@ function mergePaymentMix(
   next[key] = (next[key] ?? 0) + delta
   if (next[key] <= 0) delete next[key]
   return next
+}
+
+function roundMoney(n: number) {
+  return Math.round(n * 100) / 100
+}
+
+function parseInstallmentCount(paymentMethod: string): number {
+  const instMatch = paymentMethod.match(/·\s*(\d+)\s*x\s*$/i)
+  return instMatch ? Math.max(1, parseInt(instMatch[1]!, 10)) : 1
+}
+
+function addMonthsToDate(date: Date, months: number): Date {
+  const d = new Date(date)
+  const day = d.getDate()
+  d.setMonth(d.getMonth() + months)
+  if (d.getDate() < day) d.setDate(0)
+  return d
+}
+
+function shouldCreateReceivables(paymentMethod: string, amountPending: number): boolean {
+  if (amountPending > 0.005) return true
+  const pm = paymentMethod.trim()
+  return /^Crediário/i.test(pm) || /^Cartão de Crédito/i.test(pm)
+}
+
+type ReceivableWriteCtx = {
+  orgId: string
+  saleId: string
+  clientId: string
+  clientName: string
+  date: Date
+  paymentMethod: string
+  subtotal: number
+  amountReceived: number
+  amountPending: number
+  saleTs: Timestamp
+}
+
+function writeReceivablesForSale(
+  transaction: Parameters<Parameters<typeof runTransaction>[1]>[0],
+  ctx: ReceivableWriteCtx,
+) {
+  const { orgId, saleId, paymentMethod, subtotal, amountReceived, amountPending, saleTs, date } = ctx
+  if (!shouldCreateReceivables(paymentMethod, amountPending)) return
+
+  const installmentCount = parseInstallmentCount(paymentMethod)
+  const common = {
+    saleId,
+    clientId: ctx.clientId,
+    clientName: ctx.clientName,
+    paymentMethod,
+    saleDate: saleTs,
+    saleSubtotal: subtotal,
+    amountReceivedAtSale: amountReceived,
+    amountPendingAtSale: amountPending,
+    createdAt: serverTimestamp(),
+  }
+
+  if (amountReceived > 0.005) {
+    transaction.set(doc(receivablesCol(db, orgId), `${saleId}_entrada`), {
+      ...common,
+      installmentNumber: 0,
+      installmentCount,
+      installmentLabel: 'Recebido na venda',
+      amount: roundMoney(amountReceived),
+      status: 'recebido',
+      receivedAt: saleTs,
+      dueDate: saleTs,
+    })
+  }
+
+  const pending = roundMoney(amountPending)
+  if (pending <= 0.005) return
+
+  const n = installmentCount
+  let allocated = 0
+  for (let i = 1; i <= n; i++) {
+    const isLast = i === n
+    const parcelAmount = isLast ? roundMoney(pending - allocated) : roundMoney(pending / n)
+    allocated += parcelAmount
+    transaction.set(doc(receivablesCol(db, orgId), `${saleId}_p${String(i).padStart(2, '0')}`), {
+      ...common,
+      installmentNumber: i,
+      installmentCount: n,
+      installmentLabel: `Parcela ${i}/${n}`,
+      amount: parcelAmount,
+      status: 'aberto',
+      receivedAt: null,
+      dueDate: Timestamp.fromDate(addMonthsToDate(date, i)),
+    })
+  }
 }
 
 export async function createSale(input: CreateSaleInput) {
@@ -172,30 +263,32 @@ export async function createSale(input: CreateSaleInput) {
       transaction.set(itemRef, item)
     })
 
-    if (paymentMethod.trim().startsWith('Crediário')) {
-      const recRef = doc(receivablesCol(db, orgId), saleRef.id)
-      const instMatch = paymentMethod.match(/·\s*(\d+)\s*x\s*$/i)
-      const installmentCount = instMatch ? Math.max(1, parseInt(instMatch[1]!, 10)) : 1
-      transaction.set(recRef, {
-        saleId: saleRef.id,
-        clientId,
-        clientName,
-        amount: subtotal,
-        installmentCount,
-        paymentMethod,
-        status: 'aberto',
-        saleDate: saleTs,
-        createdAt: serverTimestamp(),
-        receivedAt: null,
-      })
-    }
+    writeReceivablesForSale(transaction, {
+      orgId,
+      saleId: saleRef.id,
+      clientId,
+      clientName,
+      date,
+      paymentMethod,
+      subtotal,
+      amountReceived: roundMoney(amountReceived),
+      amountPending: roundMoney(amountPending),
+      saleTs,
+    })
   })
 
   return saleRef.id
 }
 
 export async function deleteSale(orgId: string, saleId: string) {
-  const itemsSnap = await getDocs(saleItemsCol(db, orgId, saleId))
+  const [itemsSnap, recSnap, legacyRecSnap] = await Promise.all([
+    getDocs(saleItemsCol(db, orgId, saleId)),
+    getDocs(query(receivablesCol(db, orgId), where('saleId', '==', saleId))),
+    getDoc(doc(receivablesCol(db, orgId), saleId)),
+  ])
+  const receivableRefs = recSnap.docs.map((d) => d.ref)
+  if (legacyRecSnap.exists()) receivableRefs.push(legacyRecSnap.ref)
+
   const items = itemsSnap.docs.map((d) => ({
     id: d.id,
     ...(d.data() as Record<string, unknown>),
@@ -280,9 +373,10 @@ export async function deleteSale(orgId: string, saleId: string) {
     itemsSnap.docs.forEach((d) => {
       transaction.delete(d.ref)
     })
-    const recRef = doc(receivablesCol(db, orgId), saleId)
-    const recSnap = await transaction.get(recRef)
-    if (recSnap.exists()) transaction.delete(recRef)
+    for (const ref of receivableRefs) {
+      const rs = await transaction.get(ref)
+      if (rs.exists()) transaction.delete(ref)
+    }
     transaction.delete(saleRef)
   })
 }

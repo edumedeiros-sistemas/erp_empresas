@@ -1,17 +1,25 @@
+import { ListFilterBar } from '@/components/ListFilterBar'
 import { Button, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { clientsCol } from '@/lib/firestorePaths'
+import { textMatches } from '@/lib/listSearch'
 import { useOrg } from '@/contexts/OrgContext'
 import type { Client } from '@/types'
 import { deleteDoc, doc, onSnapshot, query } from 'firebase/firestore'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 export default function ClientListPage() {
   const { orgId } = useOrg()
   const [rows, setRows] = useState<Client[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
+
+  const filtered = useMemo(() => {
+    if (!searchQuery.trim()) return rows
+    return rows.filter((c) => textMatches(searchQuery, c.name, c.phone, c.notes))
+  }, [rows, searchQuery])
 
   async function handleDeleteRow(c: Client, e: React.MouseEvent) {
     e.preventDefault()
@@ -69,6 +77,14 @@ export default function ClientListPage() {
           {listError}
         </p>
       ) : null}
+      <div className="mb-4 max-w-md">
+        <ListFilterBar
+          label="Buscar"
+          placeholder="Nome, telefone ou observações…"
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
+      </div>
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
@@ -81,7 +97,7 @@ export default function ClientListPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((c) => (
+            {filtered.map((c) => (
               <tr key={c.id} className="border-b border-zinc-100 dark:border-zinc-900">
                 <td className="px-3 py-2">
                   <Link className="font-medium text-violet-700 hover:underline dark:text-violet-300" to={`/app/cadastros/clientes/${c.id}`}>
@@ -115,7 +131,11 @@ export default function ClientListPage() {
             ))}
           </tbody>
         </table>
-        {rows.length === 0 ? <p className="p-4 text-sm text-zinc-500">Sem clientes. Adicione o primeiro.</p> : null}
+        {rows.length === 0 ? (
+          <p className="p-4 text-sm text-zinc-500">Sem clientes. Adicione o primeiro.</p>
+        ) : filtered.length === 0 ? (
+          <p className="p-4 text-sm text-zinc-500">Nenhum cliente encontrado para esta busca.</p>
+        ) : null}
       </div>
     </div>
   )

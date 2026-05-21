@@ -225,6 +225,10 @@ export default function SaleNewPage() {
       setError('Adicione pelo menos uma linha com produto (escolha na lista ao escrever) e quantidade.')
       return
     }
+    const received = Math.max(0, Number(String(amountReceived).replace(',', '.')) || 0)
+    const subtotal = parsedLines.reduce((s, l) => s + l.quantity * l.unitPrice, 0)
+    const pending = Math.max(0, Math.round((subtotal - received) * 100) / 100)
+
     setBusy(true)
     try {
       await createSale({
@@ -233,9 +237,9 @@ export default function SaleNewPage() {
         clientName: client.name,
         date: new Date(`${dateStr}T12:00:00`),
         paymentMethod,
-        status: 'Pago',
-        amountReceived: Number(String(amountReceived).replace(',', '.')),
-        amountPending: 0,
+        status: pending > 0.01 ? 'Pendente' : 'Pago',
+        amountReceived: received,
+        amountPending: pending,
         lines: parsedLines,
       })
       navigate('/app/vendas')
