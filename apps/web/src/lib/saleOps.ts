@@ -355,38 +355,49 @@ export async function updateSale(input: UpdateSaleInput) {
 
     const returnByProduct = new Map<string, number>()
     for (const it of oldItems) {
-      const pid = String(it.productId ?? '')
+      const pid = it.productId
       if (!pid) continue
-      returnByProduct.set(pid, (returnByProduct.get(pid) ?? 0) + Number(it.quantity ?? 0))
+      returnByProduct.set(pid, (returnByProduct.get(pid) ?? 0) + it.quantity)
     }
 
-    const productSnaps: {
+    const productIds = new Set<string>()
+    for (const line of lines) productIds.add(line.productId)
+    for (const it of oldItems) productIds.add(it.productId)
+
+    type ProductMeta = {
       ref: ReturnType<typeof doc>
       stock: number
       code: string
       name: string
       size: string
       unitCost: number
-    }[] = []
+    }
+    const productById = new Map<string, ProductMeta>()
 
-    for (const line of lines) {
-      const pref = doc(productsCol(db, orgId), line.productId)
+    for (const pid of productIds) {
+      const pref = doc(productsCol(db, orgId), pid)
       const ps = await transaction.get(pref)
       if (!ps.exists()) throw new Error('Produto não encontrado.')
       const d = ps.data() as Record<string, unknown>
-      const stock = Number(d.stock ?? 0)
-      const back = returnByProduct.get(line.productId) ?? 0
-      if (stock + back < line.quantity) {
-        throw new Error(`Stock insuficiente para ${String(d.name ?? 'produto')}.`)
-      }
-      productSnaps.push({
+      productById.set(pid, {
         ref: pref,
-        stock,
+        stock: Number(d.stock ?? 0),
         code: String(d.code ?? ''),
         name: String(d.name ?? ''),
         size: String(d.size ?? ''),
         unitCost: Number(d.totalCost ?? d.cost ?? 0),
       })
+    }
+
+    const productSnaps: ProductMeta[] = []
+    for (const line of lines) {
+      const meta = productById.get(line.productId)
+      if (!meta) throw new Error('Produto não encontrado.')
+      const back = returnByProduct.get(line.productId) ?? 0
+      if (meta.stock + back < line.quantity) {
+        throw new Error(`Stock insuficiente para ${meta.name || 'produto'}.`)
+      }
+      productSnaps.push(meta)
     }
 
     let subtotal = 0
@@ -414,15 +425,26 @@ export async function updateSale(input: UpdateSaleInput) {
 
     const saleTs = Timestamp.fromDate(date)
     const newQty = lines.reduce((s, l) => s + l.quantity, 0)
-    const oldQty = oldItems.reduce((s, it) => s + Number(it.quantity ?? 0), 0)
+    const oldQty = oldItems.reduce((s, it) => s + it.quantity, 0)
 
     const oldClientRef = oldClientId ? doc(clientsCol(db, orgId), oldClientId) : null
     const newClientRef = doc(clientsCol(db, orgId), clientId)
     const newClientSnap = await transaction.get(newClientRef)
+    const oldClientSnap =
+      oldClientRef && oldClientId !== clientId ? await transaction.get(oldClientRef) : null
+    const dashRef = dashboardDoc(db, orgId)
+    const dashSnap = await transaction.get(dashRef)
+
+    const receivableSnaps = new Map<string, boolean>()
+    for (const ref of receivableRefs) {
+      const rs = await transaction.get(ref)
+      receivableSnaps.set(ref.path, rs.exists())
+    }
+
     if (!newClientSnap.exists()) throw new Error('Cliente não encontrado.')
 
-    if (oldClientId && oldClientId !== clientId && oldClientRef) {
-      const oldClientSnap = await transaction.get(oldClientRef)
+    // —— Todas as escritas abaixo ——
+    if (oldClientId && oldClientId !== clientId && oldClientRef && oldClientSnap) {
       applyClientPurchaseDelta(transaction, oldClientRef, oldClientSnap, -oldSubtotal, -oldQty, saleTs)
       applyClientPurchaseDelta(transaction, newClientRef, newClientSnap, subtotal, newQty, saleTs)
     } else {
@@ -438,26 +460,21 @@ export async function updateSale(input: UpdateSaleInput) {
 
     const netStock = new Map<string, number>()
     for (const it of oldItems) {
-      const pid = String(it.productId ?? '')
-      if (!pid) continue
-      netStock.set(pid, (netStock.get(pid) ?? 0) + Number(it.quantity ?? 0))
+      if (!it.productId) continue
+      netStock.set(it.productId, (netStock.get(it.productId) ?? 0) + it.quantity)
     }
     for (const line of lines) {
       netStock.set(line.productId, (netStock.get(line.productId) ?? 0) - line.quantity)
     }
     for (const [pid, delta] of netStock) {
       if (delta === 0) continue
-      const pref = doc(productsCol(db, orgId), pid)
-      const ps = await transaction.get(pref)
-      if (!ps.exists()) continue
-      const stock = Number((ps.data() as Record<string, unknown>).stock ?? 0)
-      const next = stock + delta
+      const meta = productById.get(pid)
+      if (!meta) continue
+      const next = meta.stock + delta
       if (next < 0) throw new Error('Stock insuficiente após alteração da venda.')
-      transaction.update(pref, { stock: next })
+      transaction.update(meta.ref, { stock: next })
     }
 
-    const dashRef = dashboardDoc(db, orgId)
-    const dashSnap = await transaction.get(dashRef)
     if (dashSnap.exists()) {
       const dash = dashSnap.data() as Record<string, unknown>
       let revenueTotal = Number(dash.revenueTotal ?? 0) - oldSubtotal + subtotal
@@ -491,8 +508,7 @@ export async function updateSale(input: UpdateSaleInput) {
       transaction.delete(d.ref)
     })
     for (const ref of receivableRefs) {
-      const rs = await transaction.get(ref)
-      if (rs.exists()) transaction.delete(ref)
+      if (receivableSnaps.get(ref.path)) transaction.delete(ref)
     }
 
     transaction.set(
@@ -572,6 +588,12 @@ export async function deleteSale(orgId: string, saleId: string) {
       }
     }
 
+    const receivableExists = new Map<string, boolean>()
+    for (const ref of receivableRefs) {
+      const rs = await transaction.get(ref)
+      receivableExists.set(ref.path, rs.exists())
+    }
+
     if (clientSnap.exists()) {
       const c = clientSnap.data() as Record<string, unknown>
       const prevTotal = Number(c.totalPurchased ?? 0)
@@ -623,8 +645,7 @@ export async function deleteSale(orgId: string, saleId: string) {
       transaction.delete(d.ref)
     })
     for (const ref of receivableRefs) {
-      const rs = await transaction.get(ref)
-      if (rs.exists()) transaction.delete(ref)
+      if (receivableExists.get(ref.path)) transaction.delete(ref)
     }
     transaction.delete(saleRef)
   })
