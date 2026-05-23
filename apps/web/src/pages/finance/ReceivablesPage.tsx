@@ -1,7 +1,7 @@
 import { Button, Card, Field, Input, PageTitle } from '@/components/Ui'
 import { db } from '@/firebase'
 import { receivablesCol } from '@/lib/firestorePaths'
-import { deleteSale } from '@/lib/saleOps'
+import { deleteSale, syncSaleStatusFromReceivables } from '@/lib/saleOps'
 import { useOrg } from '@/contexts/OrgContext'
 import type { AccountReceivable, ReceivableStatus } from '@/types'
 import {
@@ -158,12 +158,13 @@ export default function ReceivablesPage() {
 
   const groups = useMemo(() => groupReceivables(rows), [rows])
 
-  async function markReceived(id: string) {
+  async function markReceived(id: string, saleId: string) {
     if (!orgId) return
     await updateDoc(doc(receivablesCol(db, orgId), id), {
       status: 'recebido',
       receivedAt: serverTimestamp(),
     })
+    if (saleId.trim()) await syncSaleStatusFromReceivables(orgId, saleId.trim())
   }
 
   function openEdit(row: Row) {
@@ -362,7 +363,11 @@ export default function ReceivablesPage() {
                                         >
                                           Editar
                                         </Button>
-                                        <Button type="button" className="text-xs py-1" onClick={() => void markReceived(r.id)}>
+                                        <Button
+                                          type="button"
+                                          className="text-xs py-1"
+                                          onClick={() => void markReceived(r.id, r.saleId)}
+                                        >
                                           Marcar recebido
                                         </Button>
                                       </>

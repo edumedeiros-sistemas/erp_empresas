@@ -1,7 +1,7 @@
 import { Button, Field, Input, PageTitle, Select } from '@/components/Ui'
 import { db } from '@/firebase'
 import { salesCol } from '@/lib/firestorePaths'
-import { deleteSale } from '@/lib/saleOps'
+import { deleteSale, displaySaleStatus } from '@/lib/saleOps'
 import { useOrg } from '@/contexts/OrgContext'
 import type { Sale } from '@/types'
 import { onSnapshot, orderBy, query } from 'firebase/firestore'
@@ -151,7 +151,8 @@ export default function SaleListPage() {
             <div>
               <div className="font-medium">{s.clientName}</div>
               <div className="text-xs text-zinc-500">
-                {s.date?.toDate?.().toLocaleDateString('pt-BR') ?? '—'} · {s.paymentMethod} · {s.status}
+                {s.date?.toDate?.().toLocaleDateString('pt-BR') ?? '—'} · {s.paymentMethod} ·{' '}
+                {displaySaleStatus(s.paymentMethod, s.subtotal, s.amountReceived, s.status)}
               </div>
               <div className="mt-1 text-sm">
                 Total{' '}

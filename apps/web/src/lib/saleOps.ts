@@ -8,7 +8,17 @@ import {
   salesCol,
 } from '@/lib/firestorePaths'
 import type { SaleItem } from '@/types'
-import { doc, getDoc, getDocs, query, runTransaction, serverTimestamp, Timestamp, where } from 'firebase/firestore'
+import {
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  runTransaction,
+  serverTimestamp,
+  Timestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore'
 
 export interface SaleLineInput {
   productId: string
@@ -22,10 +32,25 @@ export interface CreateSaleInput {
   clientName: string
   date: Date
   paymentMethod: string
-  status: string
   amountReceived: number
-  amountPending: number
   lines: SaleLineInput[]
+}
+
+/** Estado exibido na lista (corrige vendas crediário gravadas como Pago). */
+export function displaySaleStatus(
+  paymentMethod: string,
+  subtotal: number,
+  amountReceived: number,
+  storedStatus: string,
+): string {
+  if (isCrediarioPayment(paymentMethod)) {
+    if (storedStatus.trim() === 'Pago') return 'Pago'
+    const pending = roundMoney(Math.max(0, subtotal - amountReceived))
+    return pending > 0.005 ? 'Em aberto' : 'Pago'
+  }
+  const pending = roundMoney(Math.max(0, subtotal - amountReceived))
+  if (pending > 0.005) return storedStatus.trim() || 'Pendente'
+  return storedStatus.trim() === 'Pendente' ? 'Pago' : storedStatus.trim() || 'Pago'
 }
 
 function mergePaymentMix(
@@ -57,10 +82,42 @@ function addMonthsToDate(date: Date, months: number): Date {
   return d
 }
 
-function shouldCreateReceivables(paymentMethod: string, amountPending: number): boolean {
-  if (amountPending > 0.005) return true
+function isCrediarioPayment(paymentMethod: string): boolean {
+  return /^Crediário/i.test(paymentMethod.trim())
+}
+
+/** Crediário fica em aberto até quitar no contas a receber; demais formas pagam na hora. */
+export function computeSaleStatus(
+  paymentMethod: string,
+  subtotal: number,
+  amountReceived: number,
+): string {
+  const pending = roundMoney(Math.max(0, subtotal - amountReceived))
+  if (isCrediarioPayment(paymentMethod)) {
+    return pending > 0.005 ? 'Em aberto' : 'Pago'
+  }
+  return pending > 0.005 ? 'Pendente' : 'Pago'
+}
+
+function shouldCreateReceivables(paymentMethod: string, pendingToSplit: number): boolean {
+  if (pendingToSplit > 0.005) return true
   const pm = paymentMethod.trim()
   return /^Crediário/i.test(pm) || /^Cartão de Crédito/i.test(pm)
+}
+
+/** Atualiza o estado da venda conforme parcelas do crediário (todas recebidas → Pago). */
+export async function syncSaleStatusFromReceivables(orgId: string, saleId: string) {
+  const saleRef = doc(salesCol(db, orgId), saleId)
+  const saleSnap = await getDoc(saleRef)
+  if (!saleSnap.exists()) return
+
+  const paymentMethod = String(saleSnap.data()?.paymentMethod ?? '')
+  if (!isCrediarioPayment(paymentMethod)) return
+
+  const recSnap = await getDocs(query(receivablesCol(db, orgId), where('saleId', '==', saleId)))
+  const recs = recSnap.docs.map((d) => d.data() as Record<string, unknown>)
+  const hasOpen = recs.some((r) => String(r.status ?? 'aberto') === 'aberto')
+  await updateDoc(saleRef, { status: hasOpen ? 'Em aberto' : 'Pago' })
 }
 
 type ReceivableWriteCtx = {
@@ -80,8 +137,9 @@ function writeReceivablesForSale(
   transaction: Parameters<Parameters<typeof runTransaction>[1]>[0],
   ctx: ReceivableWriteCtx,
 ) {
-  const { orgId, saleId, paymentMethod, subtotal, amountReceived, amountPending, saleTs, date } = ctx
-  if (!shouldCreateReceivables(paymentMethod, amountPending)) return
+  const { orgId, saleId, paymentMethod, subtotal, amountReceived, saleTs, date } = ctx
+  const pendingToSplit = roundMoney(Math.max(0, subtotal - amountReceived))
+  if (!shouldCreateReceivables(paymentMethod, pendingToSplit)) return
 
   const installmentCount = parseInstallmentCount(paymentMethod)
   const common = {
@@ -92,7 +150,7 @@ function writeReceivablesForSale(
     saleDate: saleTs,
     saleSubtotal: subtotal,
     amountReceivedAtSale: amountReceived,
-    amountPendingAtSale: amountPending,
+    amountPendingAtSale: pendingToSplit,
     createdAt: serverTimestamp(),
   }
 
@@ -109,7 +167,7 @@ function writeReceivablesForSale(
     })
   }
 
-  const pending = roundMoney(amountPending)
+  const pending = pendingToSplit
   if (pending <= 0.005) return
 
   const n = installmentCount
@@ -132,8 +190,7 @@ function writeReceivablesForSale(
 }
 
 export async function createSale(input: CreateSaleInput) {
-  const { orgId, clientId, clientName, date, paymentMethod, status, amountReceived, amountPending, lines } =
-    input
+  const { orgId, clientId, clientName, date, paymentMethod, amountReceived, lines } = input
 
   if (!lines.length) throw new Error('Adicione pelo menos um item à venda.')
 
@@ -199,6 +256,10 @@ export async function createSale(input: CreateSaleInput) {
       })
     })
 
+    const amountReceivedR = roundMoney(amountReceived)
+    const amountPending = roundMoney(Math.max(0, subtotal - amountReceivedR))
+    const status = computeSaleStatus(paymentMethod, subtotal, amountReceivedR)
+
     const clientData = clientSnap.data() as Record<string, unknown>
     const prevTotal = Number(clientData.totalPurchased ?? 0)
     const prevQty = Number(clientData.purchaseCount ?? 0)
@@ -251,7 +312,7 @@ export async function createSale(input: CreateSaleInput) {
       date: saleTs,
       paymentMethod,
       status,
-      amountReceived,
+      amountReceived: amountReceivedR,
       amountPending,
       subtotal,
       totalProfit,
@@ -271,8 +332,8 @@ export async function createSale(input: CreateSaleInput) {
       date,
       paymentMethod,
       subtotal,
-      amountReceived: roundMoney(amountReceived),
-      amountPending: roundMoney(amountPending),
+      amountReceived: amountReceivedR,
+      amountPending,
       saleTs,
     })
   })
@@ -323,8 +384,7 @@ function applyClientPurchaseDelta(
 }
 
 export async function updateSale(input: UpdateSaleInput) {
-  const { orgId, saleId, clientId, clientName, date, paymentMethod, status, amountReceived, amountPending, lines } =
-    input
+  const { orgId, saleId, clientId, clientName, date, paymentMethod, amountReceived, lines } = input
 
   if (!lines.length) throw new Error('Adicione pelo menos um item à venda.')
 
@@ -423,6 +483,10 @@ export async function updateSale(input: UpdateSaleInput) {
       })
     })
 
+    const amountReceivedR = roundMoney(amountReceived)
+    const amountPending = roundMoney(Math.max(0, subtotal - amountReceivedR))
+    const status = computeSaleStatus(paymentMethod, subtotal, amountReceivedR)
+
     const saleTs = Timestamp.fromDate(date)
     const newQty = lines.reduce((s, l) => s + l.quantity, 0)
     const oldQty = oldItems.reduce((s, it) => s + it.quantity, 0)
@@ -519,8 +583,8 @@ export async function updateSale(input: UpdateSaleInput) {
         date: saleTs,
         paymentMethod,
         status,
-        amountReceived: roundMoney(amountReceived),
-        amountPending: roundMoney(amountPending),
+        amountReceived: amountReceivedR,
+        amountPending,
         subtotal,
         totalProfit,
         updatedAt: serverTimestamp(),
@@ -541,8 +605,8 @@ export async function updateSale(input: UpdateSaleInput) {
       date,
       paymentMethod,
       subtotal,
-      amountReceived: roundMoney(amountReceived),
-      amountPending: roundMoney(amountPending),
+      amountReceived: amountReceivedR,
+      amountPending,
       saleTs,
     })
   })

@@ -299,8 +299,6 @@ export default function SaleNewPage() {
       return
     }
     const received = Math.max(0, Number(String(amountReceived).replace(',', '.')) || 0)
-    const subtotal = parsedLines.reduce((s, l) => s + l.quantity * l.unitPrice, 0)
-    const pending = Math.max(0, Math.round((subtotal - received) * 100) / 100)
 
     setBusy(true)
     try {
@@ -310,9 +308,7 @@ export default function SaleNewPage() {
         clientName: client.name,
         date: new Date(`${dateStr}T12:00:00`),
         paymentMethod,
-        status: pending > 0.01 ? 'Pendente' : 'Pago',
         amountReceived: received,
-        amountPending: pending,
         lines: parsedLines,
       }
       if (editSaleId) {
